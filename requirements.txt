@@ -1,0 +1,6 @@
+customtkinter
+tkinterdnd2
+pillow
+moviepy
+imageio-ffmpeg
+pyinstaller
