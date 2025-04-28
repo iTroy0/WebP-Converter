@@ -1,5 +1,5 @@
 # WebP-Converter
-A simple, beautiful, and powerful tool to convert animated WebP images into videos (.mp4, .mkv, .webm) — built with Python and CustomTkinter, Based on https://github.com/Dunttus/webptomp4 
+A simple, beautiful, and powerful tool to convert animated WebP images into videos (.mp4, .mkv, .webm) — built with Python and CustomTkinter, Based on [Dunttus/webptomp4](https://github.com/Dunttus/webptomp4) 
 
 <h1 align="center">WebP to Video Converter 🎥✨</h1>
 
