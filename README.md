@@ -28,7 +28,6 @@ Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](h
 - 🌙 Modern Dark Mode UI
 - 🛠️ Auto install requirements
 - 🎯 Standalone EXE build supported
-- 📢 Sound notification when conversion is complete
 
 ---
 
