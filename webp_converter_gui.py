@@ -4,7 +4,6 @@ import uuid
 import json
 import threading
 import subprocess
-import winsound
 from pathlib import Path
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -207,7 +206,6 @@ class WebPConverterApp(ctk.CTk):
 
         self.progress_bar.set(1)
         self.progress_text.configure(text="Done!")
-        winsound.MessageBeep()
         messagebox.showinfo("Done", "Conversion completed!")
 
     def extract_frames(self, webp_file, temp_dir):
