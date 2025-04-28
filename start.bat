@@ -39,6 +39,6 @@ rmdir /s /q build >nul 2>&1
 rmdir /s /q dist >nul 2>&1
 del /f /q *.spec >nul 2>&1
 echo [*] Building EXE...
-pyinstaller --noconsole --onefile --clean --icon=app_icon.ico webp_converter_gui.py --hidden-import=moviepy.editor --hidden-import=moviepy.video.io.ffmpeg_writer --hidden-import=moviepy.video.io.VideoFileClip --hidden-import=imageio_ffmpeg
+pyinstaller --noconsole --onefile --clean webp_converter_gui.py --hidden-import=moviepy.editor --hidden-import=moviepy.video.io.ffmpeg_writer --hidden-import=moviepy.video.io.VideoFileClip --hidden-import=imageio_ffmpeg
 pause
 goto menu
