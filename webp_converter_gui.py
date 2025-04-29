@@ -48,6 +48,8 @@ class WebPConverterApp(ctk.CTk):
             self.iconbitmap(self.icon_path)
 
         self.webp_files = []
+        self.selected_file = None
+        self.file_rows = {} 
         self.output_folder = os.getcwd()
         self.output_format = ctk.StringVar(value=".mp4")
         self.fps_value = ctk.IntVar(value=16)
@@ -89,7 +91,7 @@ class WebPConverterApp(ctk.CTk):
         format_menu = ctk.CTkOptionMenu(settings_frame, values=[".mp4", ".mkv", ".webm"], variable=self.output_format, command=lambda _: self.save_current_settings())
         format_menu.pack(pady=5)
 
-        ctk.CTkCheckBox(settings_frame, text="Combine all videos into one (Only same Res)", variable=self.combine_videos).pack(pady=(20, 5))
+        ctk.CTkCheckBox(settings_frame, text="Combine all videos into one", variable=self.combine_videos).pack(pady=(20, 5))
 
         progress_frame = ctk.CTkFrame(self.scrollable_frame)
         progress_frame.pack(fill="x", pady=20)
@@ -174,8 +176,9 @@ class WebPConverterApp(ctk.CTk):
         files = filedialog.askopenfilenames(filetypes=[("WebP files", "*.webp")])
         if files:
             self.webp_files = list(files)
-            self.show_preview(self.webp_files[0])
             self.update_files_list()
+            self.set_selected_file(self.webp_files[0])
+            self.show_preview(self.webp_files[0])
 
     def select_output_folder(self):
         folder = filedialog.askdirectory()
@@ -186,14 +189,66 @@ class WebPConverterApp(ctk.CTk):
     def update_files_list(self):
         for widget in self.files_list_frame.winfo_children():
             widget.destroy()
+        self.file_rows = {}
+
         for idx, file in enumerate(self.webp_files):
-            item = ctk.CTkFrame(self.files_list_frame, fg_color="transparent")
-            item.pack(fill="x", padx=5, pady=2)
-            label = ctk.CTkLabel(item, text=Path(file).name, anchor="w", font=("Arial", 14))
-            label.pack(side="left", fill="x", expand=True, padx=(5, 0))
-            label.bind("<Button-1>", lambda e, path=file: self.show_preview(path))
-            remove_btn = ctk.CTkButton(item, text="❌", width=30, height=30, command=lambda i=idx: self.remove_file(i))
-            remove_btn.pack(side="right", padx=(0, 5))
+            item = ctk.CTkFrame(self.files_list_frame, fg_color="#2a2a2a", corner_radius=8)
+            item.pack(fill="x", padx=5, pady=3)
+            self.file_rows[file] = item
+
+            def on_enter(e, row=item):
+                if self.selected_file != file:
+                    row.configure(fg_color="#3a3a3a")
+
+            def on_leave(e, row=item):
+                if self.selected_file != file:
+                    row.configure(fg_color="#2a2a2a")
+
+            def on_click(e, path=file):
+                self.show_preview(path)
+                self.set_selected_file(path)
+
+            file_path = Path(file)
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+            # Try to get frame count
+            try:
+                with Image.open(file_path) as im:
+                    frame_count = sum(1 for _ in ImageSequence.Iterator(im))
+            except:
+                frame_count = 0
+
+            fps = self.fps_value.get()
+            duration_sec = frame_count / fps if fps else 0
+
+            info_text = f"{file_path.name}\n• {file_size_mb:.1f} MB — {frame_count} frames — {duration_sec:.1f}s @ {fps} FPS"
+
+            # This label expands to the left
+            label = ctk.CTkLabel(item, text=info_text, anchor="w", justify="left", font=("Arial", 12))
+            label.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+            label.bind("<Button-1>", on_click)
+
+            remove_btn = ctk.CTkButton(item, text="❌", width=30, height=30, fg_color="#444", hover_color="#aa0000", text_color="white",
+                                       command=lambda i=idx: self.remove_file(i))
+            remove_btn.pack(side="right", padx=(0, 10), pady=5)
+
+            item.bind("<Enter>", on_enter)
+            item.bind("<Leave>", on_leave)
+            label.bind("<Enter>", on_enter)
+            label.bind("<Leave>", on_leave)
+            remove_btn.bind("<Enter>", on_enter)
+            remove_btn.bind("<Leave>", on_leave)
+
+    def set_selected_file(self, path):
+        if self.selected_file and self.selected_file in self.file_rows:
+            self.file_rows[self.selected_file].configure(fg_color="#2a2a2a")
+        
+        self.selected_file = path
+
+        # Re-apply the selection color after update
+        self.update_files_list()
+        if path in self.file_rows:
+            self.file_rows[path].configure(fg_color="#004488")
 
     def remove_file(self, index):
         if 0 <= index < len(self.webp_files):
@@ -214,7 +269,7 @@ class WebPConverterApp(ctk.CTk):
 
     def start_conversion(self):
         if not self.webp_files:
-            messagebox.showerror("Error", "Please select at least one WebP file.")
+            self.show_toast("⚠️ Please select at least one WebP file.", bg="#882222")
             return
         temp_dir = Path("temp_frames")
         temp_dir.mkdir(exist_ok=True)
@@ -254,7 +309,7 @@ class WebPConverterApp(ctk.CTk):
             pass
         self.progress_text.configure(text="Done!")
         self.progress_bar.set(1)
-        messagebox.showinfo("Done", "Conversion completed!")
+        self.show_toast("✅ Conversion completed!", bg="#225522")
 
     def extract_frames(self, webp_file, temp_dir, start_idx=0):
         frames = []
@@ -288,6 +343,23 @@ class WebPConverterApp(ctk.CTk):
             self.fps_value.set(settings.get("fps", 16))
             self.output_format.set(settings.get("format", ".mp4"))
             self.output_folder = settings.get("output_folder", os.getcwd())
+
+    def show_toast(self, message, duration=2500, bg="#333333"):
+        toast = ctk.CTkToplevel(self)
+        toast.overrideredirect(True)
+        toast.configure(fg_color=bg)
+        toast.wm_attributes("-topmost", True)
+
+        label = ctk.CTkLabel(toast, text=message, font=("Arial", 14), text_color="white")
+        label.pack(padx=20, pady=10)
+
+        # Position bottom right of main window
+        x = self.winfo_x() + self.winfo_width() - 320
+        y = self.winfo_y() + self.winfo_height() - 100
+        toast.geometry(f"300x60+{x}+{y}")
+
+        # Auto-close after duration
+        self.after(duration, toast.destroy)
 
 if __name__ == "__main__":
     app = WebPConverterApp()
