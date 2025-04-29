@@ -16,6 +16,9 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 **WebP to Video Converter** is a modern, smooth, and easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, or `.webm` video files.
 
 Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) and fast video processing via [MoviePy](https://zulko.github.io/moviepy/) and intially [Dunttus Code](https://github.com/Dunttus/webptomp4).
+<p align="center">
+  <img src="https://i.ibb.co/dsKWnTGt/image.png" alt="Project Screenshot">
+</p>
 
 ---
 
@@ -28,7 +31,10 @@ Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](h
 - 🌙 Modern Dark Mode UI
 - 🛠️ Auto install requirements
 - 🎯 Standalone EXE build supported
+- ▶️ Animated Preview for Selected WebP
+- ⏯️ Pause and Resume Preview Animation
 
+  
 ---
 
 # 📥 How to Use
