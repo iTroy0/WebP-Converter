@@ -89,7 +89,7 @@ class WebPConverterApp(ctk.CTk):
         format_menu = ctk.CTkOptionMenu(settings_frame, values=[".mp4", ".mkv", ".webm"], variable=self.output_format, command=lambda _: self.save_current_settings())
         format_menu.pack(pady=5)
 
-        ctk.CTkCheckBox(settings_frame, text="Combine all videos into one", variable=self.combine_videos).pack(pady=(20, 5))
+        ctk.CTkCheckBox(settings_frame, text="Combine all videos into one (Only same Res)", variable=self.combine_videos).pack(pady=(20, 5))
 
         progress_frame = ctk.CTkFrame(self.scrollable_frame)
         progress_frame.pack(fill="x", pady=20)
