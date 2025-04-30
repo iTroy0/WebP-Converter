@@ -1,5 +1,5 @@
 # WebP-Converter
-A simple, beautiful, and powerful tool to convert animated WebP images into videos (.mp4, .mkv, .webm) — built with Python and CustomTkinter, Based on [Dunttus/webptomp4](https://github.com/Dunttus/webptomp4) 
+A simple, beautiful, and powerful tool to convert animated WebP images into videos (.mp4, .mkv, .webm, .gif).
 
 <h1 align="center">WebP to Video Converter 🎥✨</h1>
 
@@ -13,11 +13,11 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 
 # 🚀 About
 
-**WebP to Video Converter** is a modern, smooth, and easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, or `.webm` video files.
+**WebP to Video Converter** is a modern, smooth, and easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, or `.webm` `.gif` video files.
 
 Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) and fast video processing via [MoviePy](https://zulko.github.io/moviepy/) and intially [Dunttus Code](https://github.com/Dunttus/webptomp4).
 <p align="center">
-  <img src="https://i.ibb.co/dsKWnTGt/image.png" alt="Project Screenshot">
+  <img src="https://i.ibb.co/wFpsrJn5/Latest-Version1.png" alt="Project Screenshot">
 </p>
 
 ---
@@ -25,27 +25,35 @@ Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](h
 # ✨ Features
 
 - 🎬 Convert animated WebP images into videos
-- 🎥 Choose between `.mp4`, `.mkv`, `.webm`
-- 🎛️ Set custom FPS (Frames Per Second)
+- 🎥 Choose between `.mp4`, `.mkv`, `.webm`, `.gif`
+- 📽️ Resolution Preset Dropdown `480p`, `720p`, `1080p`, `4K`
+- 🎛️ Set custom Frames Per Second (FPS Slider)
+- 💫 Compression Quality Setting (CRF Slider)
 - 🔗 Combine multiple WebPs into one video
+- 📺 Multithreaded Frame Extraction – Uses all CPU cores to extract frames faster from large WebP files.
 - 🌙 Modern Dark Mode UI
-- 🛠️ Auto install requirements
 - 🎯 Standalone EXE build supported
 - ▶️ Animated Preview for Selected WebP
 - ⏯️ Pause and Resume Preview Animation
-
   
 ---
 
 # 📥 How to Use
 
-1. **Install dependencies:**
+#  ▶️ Easy Version
+Download Windows Version : [Releases](https://github.com/iTroy0/WebP-Converter/releases)
+the application is completely portable no install or anything required.
 
+# 🛠️ Build your own version.
+
+1. You must have python with pip installed.
+
+3. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
-2.Run the app:
 
+2.Run the app:
 ```bash
 python webp_converter_gui.py
 ```
