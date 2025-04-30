@@ -40,24 +40,26 @@ Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](h
 
 # 📥 How to Use
 
-#  ▶️ Easy Version
+#  ▶️ Easy Version (Recommeneded For Windows Users)
 Download Windows Version : [Releases](https://github.com/iTroy0/WebP-Converter/releases)
 the application is completely portable no install or anything required.
 
+---
 # 🛠️ Build your own version.
 
 1. You must have python with pip installed.
 
-3. **Install dependencies:**
+2. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-2.Run the app:
+3.Run the app:
 ```bash
 python webp_converter_gui.py
 ```
-Or simply double-click start.bat!
+
+Or simply double-click start.bat! Recommended on windows.
 
 ---
 
