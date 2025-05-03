@@ -104,8 +104,31 @@ class WebPConverterApp(ctk.CTk):
 
         res_label = ctk.CTkLabel(format_res_frame, text="Resolution:", font=("Arial", 14))
         res_label.pack(side="left", padx=(0, 10))
-        res_menu = ctk.CTkOptionMenu(format_res_frame, values=["Same Resolution", "480p", "720p", "1080p", "4K"], variable=self.resolution_preset)
+        res_menu = ctk.CTkOptionMenu(
+            format_res_frame, 
+            values=["Same Resolution", "480p", "720p", "1080p", "4K", "Custom"], 
+            variable=self.resolution_preset, 
+            command=self.toggle_custom_res_entry
+        )
         res_menu.pack(side="left")
+
+        # Custom resolution width entry
+        self.custom_res_width = ctk.CTkEntry(
+            format_res_frame, width=70, placeholder_text="Width",
+            state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999"
+        )
+        self.custom_res_width.pack(side="left", padx=(10, 5))
+
+        # 'x' label separator
+        x_label = ctk.CTkLabel(format_res_frame, text="x", font=("Arial", 14))
+        x_label.pack(side="left")
+
+        # Custom resolution height entry
+        self.custom_res_height = ctk.CTkEntry(
+            format_res_frame, width=70, placeholder_text="Height",
+            state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999"
+        )
+        self.custom_res_height.pack(side="left", padx=(5, 0))
 
         ctk.CTkLabel(settings_frame, text="Frames Per Second (FPS):", font=("Arial", 16)).pack(pady=(0, 5))
         ctk.CTkLabel(settings_frame, text="Range: 1 to 60", font=("Arial", 14)).pack(pady=(0, 5))
@@ -142,8 +165,6 @@ class WebPConverterApp(ctk.CTk):
         self.progress_text = ctk.CTkLabel(progress_frame, text="0%", font=("Arial", 14))
         self.progress_text.pack(pady=0)
 
-        self.frame_counter = ctk.CTkLabel(progress_frame, text="Frames extracted: 0", font=("Arial", 14))
-        self.frame_counter.pack(pady=(0, 10))
 
         preview_frame = ctk.CTkFrame(self.scrollable_frame)
         preview_frame.pack(fill="both", expand=True, pady=10)
@@ -160,6 +181,15 @@ class WebPConverterApp(ctk.CTk):
         self.files_list_frame = ctk.CTkScrollableFrame(preview_frame, height=200)
         self.files_list_frame.pack(pady=(15, 10), fill="both", expand=True, padx=20)
 
+    def toggle_custom_res_entry(self, choice):
+        if choice == "Custom":
+            self.custom_res_width.configure(state='normal', fg_color="#2b2b2b", placeholder_text_color="#cccccc")
+            self.custom_res_height.configure(state='normal', fg_color="#2b2b2b", placeholder_text_color="#cccccc")
+        else:
+            self.custom_res_width.delete(0, 'end')
+            self.custom_res_height.delete(0, 'end')
+            self.custom_res_width.configure(state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999")
+            self.custom_res_height.configure(state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999")
 
     def select_webps(self):
         files = filedialog.askopenfilenames(filetypes=[("WebP files", "*.webp")])
@@ -311,50 +341,84 @@ class WebPConverterApp(ctk.CTk):
             self.show_toast("⚠️ Please select at least one WebP file.", bg="#882222")
             return
 
+        threading.Thread(target=self.run_conversion, daemon=True).start()
+
+    def run_conversion(self):
         temp_dir = Path("temp_frames")
         temp_dir.mkdir(exist_ok=True)
         fps = self.fps_value.get()
         format_choice = self.output_format.get()
+
+        total_steps = len(self.webp_files) * 2  # frame extraction + encoding per file
+        current_step = 0
 
         if self.combine_videos.get() and format_choice == ".gif":
             self.show_toast("⚠️ Cannot combine multiple files into a GIF.", bg="#882222")
             return
 
         if self.combine_videos.get():
-            frame_counter = 0
             all_frames = []
             for idx, webp_file in enumerate(self.webp_files, 1):
-                
                 self.progress_text.configure(text=f"Extracting {idx}/{len(self.webp_files)}")
-                extracted = self.extract_frames(webp_file, temp_dir, start_idx=frame_counter)
-                frame_counter += len(extracted)
-                self.frame_counter.configure(text=f"Frames extracted: {frame_counter}")
-            all_frames = sorted(temp_dir.glob("frame_*.png"))
-            all_frames = [str(p) for p in all_frames]
+                extracted = self.extract_frames(webp_file, temp_dir, start_idx=len(all_frames))
+                all_frames.extend(extracted)
+                current_step += 1
+                self.update_progress(current_step / total_steps)
+            
             if all_frames:
-                output_path = os.path.join(self.output_folder, f"combined_{uuid.uuid4().hex[:6]}{format_choice}")
+                output_path = os.path.join(
+                    self.output_folder,
+                    f"combined_{uuid.uuid4().hex[:6]}{format_choice}"
+                )
+                self.progress_text.configure(text="Encoding combined video...")
                 self.convert_to_video(all_frames, fps, output_path, format_choice)
+                current_step += 1
+                self.update_progress(current_step / total_steps)
+
             for frame in all_frames:
                 if os.path.exists(frame):
                     os.remove(frame)
         else:
             for idx, webp_file in enumerate(self.webp_files, 1):
-                self.progress_text.configure(text=f"Processing {idx}/{len(self.webp_files)}")
+                self.progress_text.configure(text=f"Extracting {idx}/{len(self.webp_files)}")
                 frames = self.extract_frames(webp_file, temp_dir)
-                self.frame_counter.configure(text=f"Frames extracted: {len(frames)}")
+                current_step += 1
+                self.update_progress(current_step / total_steps)
+
                 if frames:
-                    output_path = os.path.join(self.output_folder, f"{Path(webp_file).stem}_{uuid.uuid4().hex[:6]}{format_choice}")
+                    output_path = os.path.join(
+                        self.output_folder,
+                        f"{Path(webp_file).stem}_{uuid.uuid4().hex[:6]}{format_choice}"
+                    )
+                    self.progress_text.configure(text=f"Encoding {idx}/{len(self.webp_files)}")
                     self.convert_to_video(frames, fps, output_path, format_choice)
+                    current_step += 1
+                    self.update_progress(current_step / total_steps)
+
                     for frame in frames:
                         if os.path.exists(frame):
                             os.remove(frame)
+
         try:
             temp_dir.rmdir()
         except:
             pass
-        self.progress_text.configure(text="Done!")
+
+        self.progress_text.configure(text="✅ Done!")
         self.progress_bar.set(1)
         self.show_toast("✅ Conversion completed!", bg="#225522")
+
+    def update_progress(self, fraction):
+        # smooth animation for the progress bar
+        current_value = self.progress_bar.get()
+        steps = 100
+        step_increment = (fraction - current_value) / steps
+        for i in range(steps):
+            current_value += step_increment
+            self.progress_bar.set(current_value)
+            self.progress_text.configure(text=f"{int(current_value * 100)}%")
+            self.update_idletasks()
+            self.after(10)  # smooth delay (can adjust slightly for speed)
 
     def extract_frames(self, webp_file, temp_dir, start_idx=0):
         frames = []
@@ -377,8 +441,15 @@ class WebPConverterApp(ctk.CTk):
 
     def save_frame(self, frame, path):
         try:
-            if self.resolution_preset.get() != "Same Resolution":
-                target_size = RESOLUTION_MAP.get(self.resolution_preset.get())
+            preset = self.resolution_preset.get()
+            if preset == "Custom":
+                width = self.custom_res_width.get()
+                height = self.custom_res_height.get()
+                if width.isdigit() and height.isdigit():
+                    target_size = (int(width), int(height))
+                    frame = frame.resize(target_size, Image.LANCZOS)
+            elif preset != "Same Resolution":
+                target_size = RESOLUTION_MAP.get(preset)
                 if target_size:
                     frame = frame.resize(target_size, Image.LANCZOS)
             frame.convert("RGBA").save(path)
