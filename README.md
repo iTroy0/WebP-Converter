@@ -26,7 +26,7 @@ Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](h
 
 - 🎬 Convert animated WebP images into videos
 - 🎥 Choose between `.mp4`, `.mkv`, `.webm`, `.gif`
-- 📽️ Resolution Preset Dropdown `480p`, `720p`, `1080p`, `4K`
+- 📽️ Resolution Preset Dropdown `480p`, `720p`, `1080p`, `4K` `Custom`
 - 🎛️ Set custom Frames Per Second (FPS Slider)
 - 💫 Compression Quality Setting (CRF Slider)
 - 🔗 Combine multiple WebPs into one video
