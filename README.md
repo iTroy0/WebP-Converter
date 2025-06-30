@@ -72,6 +72,16 @@ README.md             | Project documentation
 
 ---
 
+## ☕ Support
+
+If you find this project helpful or just want to support my work, feel free to [buy me a coffee](https://buymeacoffee.com/itroy0)! Your support keeps me motivated to build and improve more awesome tools. Thank you!
+
+[![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee\&logoColor=black\&style=for-the-badge)](https://buymeacoffee.com/itroy0)
+
+---
+
+
+
 ❤️ Credits
 
 UI: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
