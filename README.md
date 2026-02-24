@@ -17,7 +17,8 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 
 Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) and fast video processing via [MoviePy](https://zulko.github.io/moviepy/) and intially [Dunttus Code](https://github.com/Dunttus/webptomp4).
 <p align="center">
-  <img src="https://i.ibb.co/wFpsrJn5/Latest-Version1.png" alt="Project Screenshot">
+  <img width="754" height="583" alt="Screenshot 2026-02-24 061126" src="https://github.com/user-attachments/assets/3d0d1234-62ba-4253-b804-2f33e83e09f9" />
+
 </p>
 
 ---
