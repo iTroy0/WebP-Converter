@@ -3,13 +3,18 @@ import sys
 import uuid
 import json
 import threading
+import tempfile
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import customtkinter as ctk
-from PIL import Image, ImageSequence, ImageTk
+from PIL import Image, ImageSequence
 from moviepy import ImageSequenceClip
+
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
 
 def resource_path(relative_path):
     try:
@@ -18,24 +23,90 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+
 SETTINGS_FILE = "settings.json"
 
 RESOLUTION_MAP = {
-    "480p": (854, 480),
-    "720p": (1280, 720),
+    "480p":  (854,  480),
+    "720p":  (1280, 720),
     "1080p": (1920, 1080),
-    "4K": (3840, 2160)
+    "4K":    (3840, 2160),
 }
+
+# ── Design tokens ──────────────────────────────
+BG          = "#141414"
+CARD        = "#1e1e1e"
+CARD2       = "#242424"
+BORDER      = "#2e2e2e"
+ACCENT      = "#00c2d4"
+ACCENT_DIM  = "#007a87"
+TEXT        = "#e8e8e8"
+TEXT_DIM    = "#707070"
+TEXT_MUTED  = "#404040"
+RED         = "#c0392b"
+GREEN       = "#1a8a4a"
+AMBER       = "#b07d20"
+SELECT_BG   = "#0d3d47"
+HOVER_BG    = "#2a2a2a"
+
+FONT_HEAD   = ("Segoe UI", 13, "bold")
+FONT_BODY   = ("Segoe UI", 12)
+FONT_SMALL  = ("Segoe UI", 11)
+FONT_MONO   = ("Consolas", 11)
+FONT_TITLE  = ("Segoe UI", 22, "bold")
+FONT_LABEL  = ("Segoe UI", 12)
+FONT_BTN    = ("Segoe UI", 13, "bold")
+
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
     return {}
 
+
 def save_settings(data):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(data, f)
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except IOError:
+        pass
+
+
+def aspect_fit(img_width, img_height, max_size=380):
+    ratio = min(max_size / img_width, max_size / img_height)
+    w = max(2, int(img_width  * ratio))
+    h = max(2, int(img_height * ratio))
+    return w if w % 2 == 0 else w + 1, h if h % 2 == 0 else h + 1
+
+
+def make_even(w: int, h: int) -> tuple:
+    return w if w % 2 == 0 else w + 1, h if h % 2 == 0 else h + 1
+
+
+# ─────────────────────────────────────────────
+# Reusable section card
+# ─────────────────────────────────────────────
+
+def section_card(parent, title: str = "", **kwargs) -> ctk.CTkFrame:
+    card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10,
+                        border_width=1, border_color=BORDER, **kwargs)
+    if title:
+        header = ctk.CTkFrame(card, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(12, 0))
+        ctk.CTkLabel(header, text=title, font=FONT_HEAD,
+                     text_color=ACCENT).pack(side="left")
+        ctk.CTkFrame(header, height=1, fg_color=BORDER).pack(
+            side="left", fill="x", expand=True, padx=(12, 0), pady=1)
+    return card
+
+
+# ─────────────────────────────────────────────
+# App
+# ─────────────────────────────────────────────
 
 class WebPConverterApp(ctk.CTk):
     def __init__(self):
@@ -43,286 +114,492 @@ class WebPConverterApp(ctk.CTk):
 
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
-        self.configure(bg="#212121")
+        self.configure(bg=BG)
 
-        self.title("WebP to Video Converter")
-        self.geometry("750x650")
-        self.minsize(700, 500)
+        self.title("WebP → Video Converter")
+        self.geometry("1000x740")
+        self.minsize(860, 600)
         self.resizable(True, True)
 
-        self.icon_path = resource_path("app_icon.ico")
-        if os.path.exists(self.icon_path):
-            self.iconbitmap(self.icon_path)
+        icon_path = resource_path("app_icon.ico")
+        if os.path.exists(icon_path):
+            self.iconbitmap(icon_path)
 
-        self.webp_files = []
-        self.selected_file = None
-        self.file_rows = {}
-        self.output_folder = os.getcwd()
-        self.output_format = ctk.StringVar(value=".mp4")
-        self.fps_value = ctk.IntVar(value=16)
-        self.combine_videos = ctk.BooleanVar(value=False)
+        # State
+        self.webp_files:    list[str] = []
+        self.selected_file: str | None = None
+        self.file_rows:     dict[str, ctk.CTkFrame] = {}
+        self.output_folder  = os.getcwd()
+        self._converting    = False
+
+        # Settings vars
+        self.output_format     = ctk.StringVar(value=".mp4")
+        self.fps_value         = ctk.IntVar(value=16)
+        self.combine_videos    = ctk.BooleanVar(value=False)
         self.resolution_preset = ctk.StringVar(value="Same Resolution")
-        self.crf_value = ctk.IntVar(value=22)
+        self.crf_value         = ctk.IntVar(value=22)
 
-        self.preview_frames = []
-        self.preview_index = 0
-        self.preview_running = False
+        # Preview state
+        self.preview_frames:   list[ctk.CTkImage] = []
+        self.preview_index     = 0
+        self.preview_running   = False
+        self._preview_after_id = None
 
-        self.scrollable_frame = ctk.CTkScrollableFrame(
-            self,
-            scrollbar_button_color="#3a3a3a",
-            scrollbar_button_hover_color="#505050",
-            fg_color="#212121",
-            corner_radius=10
-        )
-        self.scrollable_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        self.create_widgets()
+        self._build_layout()
         self.load_previous_settings()
+        # Force CTkScrollableFrame to render its children correctly on first show
+        self.after(100, self._force_left_render)
 
-    def create_widgets(self):
-        title_frame = ctk.CTkFrame(self.scrollable_frame)
-        title_frame.pack(pady=10)
-        ctk.CTkLabel(title_frame, text="WebP to Video Converter", font=("Arial", 28, "bold")).pack()
+    def _force_left_render(self):
+        """Nudge the left CTkScrollableFrame so it renders children without needing a manual scroll."""
+        self._left_scroll._parent_canvas.yview_scroll(1, "units")
+        self._left_scroll._parent_canvas.yview_scroll(-1, "units")
 
-        settings_frame = ctk.CTkFrame(self.scrollable_frame)
-        settings_frame.pack(fill="x", pady=15)
+    # ── Layout skeleton ──────────────────────
 
-        file_buttons_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        file_buttons_frame.pack(pady=10)
+    def _build_layout(self):
+        # ── Title bar ──
+        title_bar = ctk.CTkFrame(self, fg_color=CARD, corner_radius=0, height=56)
+        title_bar.pack(fill="x", side="top")
+        title_bar.pack_propagate(False)
 
-        ctk.CTkButton(file_buttons_frame, text="Choose WebP File(s)", command=self.select_webps).pack(side="left", padx=10)
-        ctk.CTkButton(file_buttons_frame, text="Select Output Folder", command=self.select_output_folder).pack(side="left", padx=10)
+        ctk.CTkLabel(
+            title_bar,
+            text="  ⬡  WebP → Video",
+            font=FONT_TITLE,
+            text_color=TEXT,
+        ).pack(side="left", padx=20, pady=10)
 
-        format_res_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        format_res_frame.pack(pady=10)
-
-        format_label = ctk.CTkLabel(format_res_frame, text="Format:", font=("Arial", 14))
-        format_label.pack(side="left", padx=(0, 10))
-        format_menu = ctk.CTkOptionMenu(format_res_frame, values=[".mp4", ".mkv", ".webm", ".gif"], variable=self.output_format)
-        format_menu.pack(side="left", padx=(0, 30))
-
-        res_label = ctk.CTkLabel(format_res_frame, text="Resolution:", font=("Arial", 14))
-        res_label.pack(side="left", padx=(0, 10))
-        res_menu = ctk.CTkOptionMenu(
-            format_res_frame, 
-            values=["Same Resolution", "480p", "720p", "1080p", "4K", "Custom"], 
-            variable=self.resolution_preset, 
-            command=self.toggle_custom_res_entry
+        self.status_dot = ctk.CTkLabel(
+            title_bar, text="● READY",
+            font=("Consolas", 11, "bold"),
+            text_color=ACCENT,
         )
-        res_menu.pack(side="left")
+        self.status_dot.pack(side="right", padx=20)
 
-        # Custom resolution width entry
+        # ── Body: two columns ──
+        body = ctk.CTkFrame(self, fg_color=BG)
+        body.pack(fill="both", expand=True, padx=16, pady=12)
+        body.columnconfigure(0, weight=1, minsize=340)
+        body.columnconfigure(1, weight=1, minsize=380)
+        body.rowconfigure(0, weight=1)
+
+        left_scroll = ctk.CTkScrollableFrame(
+            body, fg_color=BG,
+            scrollbar_button_color=CARD2,
+            scrollbar_button_hover_color=BORDER,
+            corner_radius=0,
+        )
+        left_scroll.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self._left_scroll = left_scroll
+
+        right = ctk.CTkFrame(body, fg_color=BG)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.rowconfigure(1, weight=1)
+        right.columnconfigure(0, weight=1)
+
+        self._build_settings(left_scroll)
+        self._build_preview(right)
+
+    # ── Left: settings ───────────────────────
+
+    def _build_settings(self, parent):
+        # FILES card
+        files_card = section_card(parent, "FILES")
+        files_card.pack(fill="x", pady=(0, 10))
+
+        btn_row = ctk.CTkFrame(files_card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(10, 6))
+
+        ctk.CTkButton(
+            btn_row, text="＋  Add WebP Files",
+            command=self.select_webps,
+            fg_color=ACCENT, hover_color=ACCENT_DIM,
+            text_color="#000000", font=FONT_BTN,
+            corner_radius=8, height=36,
+        ).pack(side="left", expand=True, fill="x", padx=(0, 6))
+
+        ctk.CTkButton(
+            btn_row, text="📁  Output Folder",
+            command=self.select_output_folder,
+            fg_color=CARD2, hover_color=HOVER_BG,
+            text_color=TEXT, font=FONT_BTN,
+            border_width=1, border_color=BORDER,
+            corner_radius=8, height=36,
+        ).pack(side="left", expand=True, fill="x")
+
+        self.output_folder_label = ctk.CTkLabel(
+            files_card,
+            text=f"→  {self.output_folder}",
+            font=FONT_MONO, text_color=TEXT_DIM,
+            anchor="w", wraplength=290,
+        )
+        self.output_folder_label.pack(fill="x", padx=16, pady=(0, 12))
+
+        # FORMAT & RESOLUTION card
+        fmt_card = section_card(parent, "FORMAT  &  RESOLUTION")
+        fmt_card.pack(fill="x", pady=(0, 10))
+
+        fmt_grid = ctk.CTkFrame(fmt_card, fg_color="transparent")
+        fmt_grid.pack(fill="x", padx=16, pady=(10, 0))
+        fmt_grid.columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(fmt_grid, text="Container", font=FONT_SMALL,
+                     text_color=TEXT_DIM).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ctk.CTkLabel(fmt_grid, text="Resolution", font=FONT_SMALL,
+                     text_color=TEXT_DIM).grid(row=0, column=1, sticky="w",
+                                               pady=(0, 4), padx=(8, 0))
+
+        ctk.CTkOptionMenu(
+            fmt_grid, values=[".mp4", ".mkv", ".webm", ".gif"],
+            variable=self.output_format,
+            fg_color=CARD2, button_color=ACCENT, button_hover_color=ACCENT_DIM,
+            text_color=TEXT, font=FONT_BODY, dropdown_fg_color=CARD2,
+            corner_radius=8,
+        ).grid(row=1, column=0, sticky="ew")
+
+        ctk.CTkOptionMenu(
+            fmt_grid,
+            values=["Same Resolution", "480p", "720p", "1080p", "4K", "Custom"],
+            variable=self.resolution_preset,
+            command=self.toggle_custom_res_entry,
+            fg_color=CARD2, button_color=ACCENT, button_hover_color=ACCENT_DIM,
+            text_color=TEXT, font=FONT_BODY, dropdown_fg_color=CARD2,
+            corner_radius=8,
+        ).grid(row=1, column=1, sticky="ew", padx=(8, 0))
+
+        custom_row = ctk.CTkFrame(fmt_card, fg_color="transparent")
+        custom_row.pack(fill="x", padx=16, pady=(10, 14))
+
         self.custom_res_width = ctk.CTkEntry(
-            format_res_frame, width=70, placeholder_text="Width",
-            state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999"
+            custom_row, width=90, placeholder_text="Width",
+            state="disabled", fg_color=CARD2, border_color=BORDER,
+            placeholder_text_color=TEXT_MUTED, text_color=TEXT, corner_radius=8,
         )
-        self.custom_res_width.pack(side="left", padx=(10, 5))
+        self.custom_res_width.pack(side="left")
 
-        # 'x' label separator
-        x_label = ctk.CTkLabel(format_res_frame, text="x", font=("Arial", 14))
-        x_label.pack(side="left")
+        ctk.CTkLabel(custom_row, text=" × ", font=FONT_BODY,
+                     text_color=TEXT_DIM).pack(side="left")
 
-        # Custom resolution height entry
         self.custom_res_height = ctk.CTkEntry(
-            format_res_frame, width=70, placeholder_text="Height",
-            state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999"
+            custom_row, width=90, placeholder_text="Height",
+            state="disabled", fg_color=CARD2, border_color=BORDER,
+            placeholder_text_color=TEXT_MUTED, text_color=TEXT, corner_radius=8,
         )
-        self.custom_res_height.pack(side="left", padx=(5, 0))
+        self.custom_res_height.pack(side="left")
 
-        ctk.CTkLabel(settings_frame, text="Frames Per Second (FPS):", font=("Arial", 16)).pack(pady=(0, 5))
-        ctk.CTkLabel(settings_frame, text="Range: 1 to 60", font=("Arial", 14)).pack(pady=(0, 5))
-        fps_slider = ctk.CTkSlider(settings_frame, from_=1, to=60, number_of_steps=59, variable=self.fps_value)
-        fps_slider.pack(pady=0, padx=50, fill="x")
-        self.fps_label = ctk.CTkLabel(settings_frame, text=f"FPS: {self.fps_value.get()}", font=("Arial", 14))
-        self.fps_label.pack(pady=(0, 5))
-        def update_fps_label(value):
-            self.fps_label.configure(text=f"FPS: {int(float(value))}")
+        ctk.CTkLabel(
+            custom_row, text="  px (Custom only)",
+            font=FONT_SMALL, text_color=TEXT_MUTED,
+        ).pack(side="left")
 
-        fps_slider.configure(command=update_fps_label)
-        
-        ctk.CTkLabel(settings_frame, text="Compression Quality (CRF):", font=("Arial", 16)).pack(pady=(1, 5))
-        ctk.CTkLabel(settings_frame, text="Range: 18 (best quality) to 30 (smaller size)", font=("Arial", 14)).pack(pady=(0, 5))
-        crf_slider = ctk.CTkSlider(settings_frame, from_=18, to=30, number_of_steps=12, variable=self.crf_value)
-        crf_slider.pack(pady=5, padx=50, fill="x")
-        self.crf_value_label = ctk.CTkLabel(settings_frame, text=f"CRF: {self.crf_value.get()}", font=("Arial", 14))
-        self.crf_value_label.pack(pady=(0, 5))
+        # ENCODING card
+        enc_card = section_card(parent, "ENCODING")
+        enc_card.pack(fill="x", pady=(0, 10))
 
-        def update_crf_label(value):
-            self.crf_value_label.configure(text=f"CRF: {int(float(value))}")
+        self._slider_row(
+            enc_card, label="Frames Per Second", suffix="FPS",
+            var=self.fps_value, from_=1, to=60, steps=59, attr="fps_label",
+        )
+        self._slider_row(
+            enc_card, label="Compression  (CRF)", suffix="CRF",
+            var=self.crf_value, from_=18, to=30, steps=12, attr="crf_label",
+            hint="18 = best quality   ·   30 = smaller file",
+        )
 
-        crf_slider.configure(command=update_crf_label)
-        ctk.CTkCheckBox(settings_frame, text="Combine all videos into one", variable=self.combine_videos).pack(pady=(1, 5))
-        progress_frame = ctk.CTkFrame(self.scrollable_frame)
-        progress_frame.pack(fill="x", pady=20)
+        ctk.CTkCheckBox(
+            enc_card,
+            text="Combine all files into one output",
+            variable=self.combine_videos,
+            text_color=TEXT, font=FONT_BODY,
+            checkmark_color="#000000",
+            fg_color=ACCENT, hover_color=ACCENT_DIM,
+            border_color=BORDER, corner_radius=4,
+        ).pack(anchor="w", padx=16, pady=(4, 14))
 
-        ctk.CTkButton(progress_frame, text="Start Conversion", command=self.start_conversion_thread, font=("Arial", 18)).pack(pady=10)
+        # CONVERT card
+        conv_card = section_card(parent, "CONVERT")
+        conv_card.pack(fill="x", pady=(0, 10))
 
-        self.progress_bar = ctk.CTkProgressBar(progress_frame)
-        self.progress_bar.pack(pady=(0, 5), fill="x", padx=40)
+        self.convert_btn = ctk.CTkButton(
+            conv_card,
+            text="▶   START CONVERSION",
+            command=self.start_conversion,
+            fg_color=ACCENT, hover_color=ACCENT_DIM,
+            text_color="#000000",
+            font=("Segoe UI", 15, "bold"),
+            corner_radius=8, height=46,
+        )
+        self.convert_btn.pack(fill="x", padx=16, pady=(10, 10))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            conv_card,
+            fg_color=CARD2, progress_color=ACCENT,
+            corner_radius=4, height=6,
+        )
+        self.progress_bar.pack(fill="x", padx=16, pady=(0, 6))
         self.progress_bar.set(0)
 
-        self.progress_text = ctk.CTkLabel(progress_frame, text="0%", font=("Arial", 14))
-        self.progress_text.pack(pady=0)
+        self.progress_text = ctk.CTkLabel(
+            conv_card, text="", font=FONT_MONO,
+            text_color=TEXT_DIM, anchor="w",
+        )
+        self.progress_text.pack(fill="x", padx=16, pady=(0, 14))
 
+    def _slider_row(self, parent, label, suffix, var, from_, to, steps,
+                    attr, hint=""):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(10, 0))
 
-        preview_frame = ctk.CTkFrame(self.scrollable_frame)
-        preview_frame.pack(fill="both", expand=True, pady=10)
+        ctk.CTkLabel(row, text=label, font=FONT_LABEL, text_color=TEXT).pack(side="left")
+        val_lbl = ctk.CTkLabel(
+            row, text=f"{var.get()} {suffix}",
+            font=("Consolas", 12, "bold"), text_color=ACCENT,
+        )
+        val_lbl.pack(side="right")
+        setattr(self, attr, val_lbl)
 
-        ctk.CTkLabel(preview_frame, text="Preview Selected Files:", font=("Arial", 16)).pack(pady=(0, 10))
-        self.preview_label = ctk.CTkLabel(preview_frame, text="No preview")
-        self.preview_label.pack(pady=(0, 10))
-        preview_button_frame = ctk.CTkFrame(preview_frame, fg_color="transparent")
-        preview_button_frame.pack(pady=(10, 0))
+        slider = ctk.CTkSlider(
+            parent, from_=from_, to=to, number_of_steps=steps, variable=var,
+            fg_color=CARD2, progress_color=ACCENT,
+            button_color=ACCENT, button_hover_color=ACCENT_DIM,
+        )
+        slider.pack(fill="x", padx=16, pady=(4, 0))
+        slider.configure(
+            command=lambda v, lbl=val_lbl, sfx=suffix:
+                lbl.configure(text=f"{int(float(v))} {sfx}")
+        )
 
-        ctk.CTkButton(preview_button_frame, text="Clear List", command=self.clear_file_list).pack(side="left", padx=10)
-        ctk.CTkButton(preview_button_frame, text="Open Output Folder", command=self.open_output_folder).pack(side="left", padx=10)
-        
-        self.files_list_frame = ctk.CTkScrollableFrame(preview_frame, height=200)
-        self.files_list_frame.pack(pady=(15, 10), fill="both", expand=True, padx=20)
+        if hint:
+            ctk.CTkLabel(parent, text=hint, font=FONT_SMALL,
+                         text_color=TEXT_MUTED).pack(anchor="w", padx=16, pady=(2, 0))
+
+    # ── Right: preview + queue ───────────────
+
+    def _build_preview(self, parent):
+        prev_card = section_card(parent, "PREVIEW")
+        prev_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        self.preview_label = ctk.CTkLabel(
+            prev_card,
+            text="No file selected",
+            font=FONT_SMALL, text_color=TEXT_MUTED,
+            width=380, height=240,
+        )
+        self.preview_label.pack(padx=16, pady=(10, 12))
+
+        list_card = section_card(parent, "QUEUE")
+        list_card.grid(row=1, column=0, sticky="nsew")
+
+        list_btn_row = ctk.CTkFrame(list_card, fg_color="transparent")
+        list_btn_row.pack(fill="x", padx=16, pady=(10, 8))
+
+        ctk.CTkButton(
+            list_btn_row, text="🗑  Clear All",
+            command=self.clear_file_list,
+            fg_color=CARD2, hover_color=HOVER_BG,
+            text_color=TEXT, font=FONT_SMALL,
+            border_width=1, border_color=BORDER,
+            corner_radius=6, height=30, width=110,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            list_btn_row, text="📂  Open Folder",
+            command=self.open_output_folder,
+            fg_color=CARD2, hover_color=HOVER_BG,
+            text_color=TEXT, font=FONT_SMALL,
+            border_width=1, border_color=BORDER,
+            corner_radius=6, height=30, width=120,
+        ).pack(side="left")
+
+        self.files_list_frame = ctk.CTkScrollableFrame(
+            list_card, fg_color="transparent",
+            scrollbar_button_color=CARD2,
+            scrollbar_button_hover_color=BORDER,
+        )
+        self.files_list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    # ── Settings persistence ─────────────────
+
+    def save_current_settings(self):
+        save_settings({
+            "fps":           self.fps_value.get(),
+            "format":        self.output_format.get(),
+            "crf":           self.crf_value.get(),
+            "resolution":    self.resolution_preset.get(),
+            "output_folder": self.output_folder,
+        })
+
+    def load_previous_settings(self):
+        s = load_settings()
+        if not s:
+            return
+        self.fps_value.set(s.get("fps", 16))
+        self.output_format.set(s.get("format", ".mp4"))
+        self.crf_value.set(s.get("crf", 22))
+        self.resolution_preset.set(s.get("resolution", "Same Resolution"))
+        self.output_folder = s.get("output_folder", os.getcwd())
+        self._refresh_output_label()
+        self.fps_label.configure(text=f"{self.fps_value.get()} FPS")
+        self.crf_label.configure(text=f"{self.crf_value.get()} CRF")
+        self.toggle_custom_res_entry(self.resolution_preset.get())
+
+    # ── UI helpers ───────────────────────────
+
+    def _refresh_output_label(self):
+        self.output_folder_label.configure(text=f"→  {self.output_folder}")
+
+    def _set_status(self, text: str, color: str = ACCENT):
+        self.status_dot.configure(text=f"● {text}", text_color=color)
 
     def toggle_custom_res_entry(self, choice):
         if choice == "Custom":
-            self.custom_res_width.configure(state='normal', fg_color="#2b2b2b", placeholder_text_color="#cccccc")
-            self.custom_res_height.configure(state='normal', fg_color="#2b2b2b", placeholder_text_color="#cccccc")
+            self.custom_res_width.configure(
+                state="normal", fg_color=CARD2, placeholder_text_color=TEXT_DIM)
+            self.custom_res_height.configure(
+                state="normal", fg_color=CARD2, placeholder_text_color=TEXT_DIM)
         else:
-            self.custom_res_width.delete(0, 'end')
-            self.custom_res_height.delete(0, 'end')
-            self.custom_res_width.configure(state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999")
-            self.custom_res_height.configure(state='disabled', fg_color="#3a3a3a", placeholder_text_color="#999999")
+            self.custom_res_width.delete(0, "end")
+            self.custom_res_height.delete(0, "end")
+            self.custom_res_width.configure(
+                state="disabled", fg_color=CARD2, placeholder_text_color=TEXT_MUTED)
+            self.custom_res_height.configure(
+                state="disabled", fg_color=CARD2, placeholder_text_color=TEXT_MUTED)
+
+    # ── File selection ───────────────────────
 
     def select_webps(self):
         files = filedialog.askopenfilenames(filetypes=[("WebP files", "*.webp")])
-        if files:
-            self.webp_files = list(files)
-            self.update_files_list()
-            self.set_selected_file(self.webp_files[0])
-            self.show_preview(self.webp_files[0])
+        if not files:
+            return
+        existing = set(self.webp_files)
+        added = [f for f in files if f not in existing]
+        self.webp_files.extend(added)
+        self.update_files_list()
+        if added:
+            self.set_selected_file(added[0])
+            self.show_preview(added[0])
 
     def select_output_folder(self):
         folder = filedialog.askdirectory()
         if folder:
             self.output_folder = folder
+            self._refresh_output_label()
             self.save_current_settings()
 
-    def show_preview(self, filepath):
-        try:
-            self.preview_running = False
-            with Image.open(filepath) as im:
-                frames = []
-                base_frame = im.convert("RGBA")
-                frames.append(ImageTk.PhotoImage(base_frame.copy().resize((400, 400))))
-
-                try:
-                    while True:
-                        im.seek(im.tell() + 1)
-                        frame = im.convert("RGBA")
-                        composed_frame = Image.alpha_composite(base_frame, frame)
-                        base_frame = composed_frame
-                        frames.append(ImageTk.PhotoImage(composed_frame.copy().resize((400, 400))))
-                except EOFError:
-                    pass
-
-                self.preview_frames = frames
-                self.preview_index = 0
-
-                if frames:
-                    self.preview_label.configure(image=frames[0], text="")
-                    self.preview_label.image = frames[0]
-                    self.preview_running = True
-                    self.animate_preview()
-                    self.preview_label.bind("<Enter>", lambda e: self.pause_preview())
-                    self.preview_label.bind("<Leave>", lambda e: self.resume_preview())
-        except Exception as e:
-            print(f"Error showing preview: {e}")
-            self.preview_label.configure(text="No preview", image="")
-
-    def animate_preview(self):
-        if self.preview_frames and self.preview_running:
-            frame = self.preview_frames[self.preview_index]
-            self.preview_label.configure(image=frame, text="")
-            self.preview_label.image = frame
-            self.preview_index = (self.preview_index + 1) % len(self.preview_frames)
-            self.after(100, self.animate_preview)
-
-    def pause_preview(self):
-        self.preview_running = False
-
-    def resume_preview(self):
-        if not self.preview_running:
-            self.preview_running = True
-            self.animate_preview()
+    # ── File list UI ─────────────────────────
 
     def update_files_list(self):
         for widget in self.files_list_frame.winfo_children():
             widget.destroy()
         self.file_rows = {}
 
+        if not self.webp_files:
+            ctk.CTkLabel(
+                self.files_list_frame,
+                text="No files added yet",
+                font=FONT_SMALL, text_color=TEXT_MUTED,
+            ).pack(pady=20)
+            return
+
         for idx, file in enumerate(self.webp_files):
-            item = ctk.CTkFrame(self.files_list_frame, fg_color="#2a2a2a", corner_radius=8)
-            item.pack(fill="x", padx=5, pady=3)
+            is_selected = file == self.selected_file
+            bg = SELECT_BG if is_selected else CARD2
+            border = ACCENT if is_selected else BORDER
+
+            item = ctk.CTkFrame(
+                self.files_list_frame, fg_color=bg, corner_radius=8,
+                border_width=1, border_color=border,
+            )
+            item.pack(fill="x", padx=4, pady=3)
             self.file_rows[file] = item
 
-            def on_enter(e, row=item):
-                if self.selected_file != file:
-                    row.configure(fg_color="#3a3a3a")
+            file_path    = Path(file)
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            try:
+                with Image.open(file_path) as im:
+                    frame_count = sum(1 for _ in ImageSequence.Iterator(im))
+                    dims = f"{im.width}×{im.height}"
+            except Exception:
+                frame_count, dims = 0, "?"
+            fps          = self.fps_value.get()
+            duration_sec = frame_count / fps if fps else 0
 
-            def on_leave(e, row=item):
-                if self.selected_file != file:
-                    row.configure(fg_color="#2a2a2a")
+            def on_enter(e, row=item, path=file):
+                if path != self.selected_file:
+                    row.configure(fg_color=HOVER_BG)
+
+            def on_leave(e, row=item, path=file):
+                if path != self.selected_file:
+                    row.configure(fg_color=CARD2)
 
             def on_click(e, path=file):
                 self.show_preview(path)
                 self.set_selected_file(path)
 
-            file_path = Path(file)
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            left = ctk.CTkFrame(item, fg_color="transparent")
+            left.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
 
-            try:
-                with Image.open(file_path) as im:
-                    frame_count = sum(1 for _ in ImageSequence.Iterator(im))
-            except:
-                frame_count = 0
+            ctk.CTkLabel(
+                left, text=file_path.name,
+                font=FONT_HEAD,
+                text_color=ACCENT if is_selected else TEXT,
+                anchor="w",
+            ).pack(fill="x")
 
-            fps = self.fps_value.get()
-            duration_sec = frame_count / fps if fps else 0
+            ctk.CTkLabel(
+                left,
+                text=f"{file_size_mb:.1f} MB  ·  {dims}  ·  {frame_count} frames  ·  {duration_sec:.1f}s",
+                font=FONT_MONO, text_color=TEXT_DIM, anchor="w",
+            ).pack(fill="x")
 
-            info_text = f"{file_path.name}\n• {file_size_mb:.1f} MB — {frame_count} frames — {duration_sec:.1f}s @ {fps} FPS"
+            remove_btn = ctk.CTkButton(
+                item, text="✕", width=28, height=28,
+                fg_color="transparent", hover_color=RED,
+                text_color=TEXT_DIM, font=("Segoe UI", 12),
+                corner_radius=6,
+                command=lambda i=idx: self.remove_file(i),
+            )
+            remove_btn.pack(side="right", padx=(0, 8), pady=5)
 
-            label = ctk.CTkLabel(item, text=info_text, anchor="w", justify="left", font=("Arial", 12))
-            label.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
-            label.bind("<Button-1>", on_click)
-
-            remove_btn = ctk.CTkButton(item, text="❌", width=30, height=30, fg_color="#444", hover_color="#aa0000", text_color="white",
-                                       command=lambda i=idx: self.remove_file(i))
-            remove_btn.pack(side="right", padx=(0, 10), pady=5)
-
-            item.bind("<Enter>", on_enter)
-            item.bind("<Leave>", on_leave)
-            label.bind("<Enter>", on_enter)
-            label.bind("<Leave>", on_leave)
+            for w in (item, left):
+                w.bind("<Enter>", on_enter)
+                w.bind("<Leave>", on_leave)
+                w.bind("<Button-1>", on_click)
+            for child in left.winfo_children():
+                child.bind("<Enter>", on_enter)
+                child.bind("<Leave>", on_leave)
+                child.bind("<Button-1>", on_click)
             remove_btn.bind("<Enter>", on_enter)
             remove_btn.bind("<Leave>", on_leave)
 
-    def set_selected_file(self, path):
+    def set_selected_file(self, path: str):
         if self.selected_file and self.selected_file in self.file_rows:
-            self.file_rows[self.selected_file].configure(fg_color="#2a2a2a")
-        
+            self.file_rows[self.selected_file].configure(
+                fg_color=CARD2, border_color=BORDER)
         self.selected_file = path
-
-        self.update_files_list()
         if path in self.file_rows:
-            self.file_rows[path].configure(fg_color="#004488")
+            self.file_rows[path].configure(
+                fg_color=SELECT_BG, border_color=ACCENT)
 
-    def remove_file(self, index):
+    def remove_file(self, index: int):
         if 0 <= index < len(self.webp_files):
-            del self.webp_files[index]
+            removed = self.webp_files.pop(index)
+            if self.selected_file == removed:
+                self.selected_file = self.webp_files[0] if self.webp_files else None
             self.update_files_list()
+            if self.selected_file:
+                self.show_preview(self.selected_file)
+            else:
+                self._stop_preview()
+                self.preview_label.configure(image="", text="No file selected")
 
     def clear_file_list(self):
-        self.webp_files = []
+        self.webp_files.clear()
+        self.selected_file = None
         self.update_files_list()
-        self.preview_label.configure(image="", text="No preview")
+        self._stop_preview()
+        self.preview_label.configure(image="", text="No file selected")
 
     def open_output_folder(self):
         if os.path.exists(self.output_folder):
@@ -333,193 +610,281 @@ class WebPConverterApp(ctk.CTk):
             else:
                 subprocess.Popen(["xdg-open", self.output_folder])
 
-    def start_conversion_thread(self):
-        threading.Thread(target=self.start_conversion, daemon=True).start()
+    # ── Preview ──────────────────────────────
+
+    def show_preview(self, filepath: str):
+        self._stop_preview()
+        self.preview_label.configure(image="", text="Loading preview…")
+        threading.Thread(
+            target=self._load_preview_frames, args=(filepath,), daemon=True
+        ).start()
+
+    def _load_preview_frames(self, filepath: str):
+        try:
+            frames: list[ctk.CTkImage] = []
+            with Image.open(filepath) as im:
+                w, h = aspect_fit(im.width, im.height, 380)
+                base = im.convert("RGBA")
+                frames.append(ctk.CTkImage(
+                    light_image=base.copy().resize((w, h), Image.LANCZOS), size=(w, h)))
+                try:
+                    while True:
+                        im.seek(im.tell() + 1)
+                        frame = im.convert("RGBA")
+                        composed = Image.alpha_composite(base, frame)
+                        base = composed
+                        frames.append(ctk.CTkImage(
+                            light_image=composed.resize((w, h), Image.LANCZOS), size=(w, h)))
+                except EOFError:
+                    pass
+            self.after(0, self._start_preview, frames)
+        except Exception as e:
+            self.after(0, lambda: self.preview_label.configure(
+                image="", text=f"Preview error: {e}"))
+
+    def _start_preview(self, frames: list):
+        self.preview_frames = frames
+        self.preview_index  = 0
+        if frames:
+            self.preview_label.configure(image=frames[0], text="")
+            self.preview_label.image = frames[0]
+            self.preview_running = True
+            self._animate_preview()
+            self.preview_label.bind("<Enter>", lambda _e: self._stop_preview())
+            self.preview_label.bind("<Leave>", lambda _e: self._resume_preview())
+
+    def _animate_preview(self):
+        if not self.preview_frames or not self.preview_running:
+            return
+        frame = self.preview_frames[self.preview_index]
+        self.preview_label.configure(image=frame, text="")
+        self.preview_label.image = frame
+        self.preview_index = (self.preview_index + 1) % len(self.preview_frames)
+        self._preview_after_id = self.after(100, self._animate_preview)
+
+    def _stop_preview(self):
+        self.preview_running = False
+        if self._preview_after_id:
+            self.after_cancel(self._preview_after_id)
+            self._preview_after_id = None
+
+    def _resume_preview(self):
+        if not self.preview_running and self.preview_frames:
+            self.preview_running = True
+            self._animate_preview()
+
+    # ── Conversion ───────────────────────────
 
     def start_conversion(self):
+        if self._converting:
+            self.show_toast("⏳  Conversion already running", bg=AMBER)
+            return
         if not self.webp_files:
-            self.show_toast("⚠️ Please select at least one WebP file.", bg="#882222")
+            self.show_toast("⚠️  Please add at least one WebP file", bg=RED)
+            return
+        if self.combine_videos.get() and self.output_format.get() == ".gif":
+            self.show_toast("⚠️  Cannot combine files into a GIF", bg=RED)
             return
 
-        threading.Thread(target=self.run_conversion, daemon=True).start()
+        self._converting = True
+        self.convert_btn.configure(state="disabled", text="⏳  CONVERTING…",
+                                   fg_color=ACCENT_DIM)
+        self.progress_bar.set(0)
+        self.progress_text.configure(text="Starting…")
+        self._set_status("CONVERTING", AMBER)
+        self.save_current_settings()
+        threading.Thread(target=self._run_conversion, daemon=True).start()
 
-    def run_conversion(self):
-        temp_dir = Path("temp_frames")
-        temp_dir.mkdir(exist_ok=True)
-        fps = self.fps_value.get()
+    def _run_conversion(self):
+        fps           = self.fps_value.get()
         format_choice = self.output_format.get()
 
-        total_steps = len(self.webp_files) * 2  # frame extraction + encoding per file
-        current_step = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_dir     = Path(tmp)
+            total_steps  = len(self.webp_files) * 2
+            current_step = 0
 
-        if self.combine_videos.get() and format_choice == ".gif":
-            self.show_toast("⚠️ Cannot combine multiple files into a GIF.", bg="#882222")
-            return
+            try:
+                if self.combine_videos.get():
+                    all_frames: list[str] = []
+                    target_size: tuple | None = None
+                    for idx, webp_file in enumerate(self.webp_files, 1):
+                        self._ui(self.progress_text.configure,
+                                 text=f"Extracting {idx} / {len(self.webp_files)}")
+                        extracted = self._extract_frames(
+                            webp_file, temp_dir, start_idx=len(all_frames))
+                        if extracted and target_size is None:
+                            with Image.open(extracted[0]) as im:
+                                target_size = make_even(im.width, im.height)
+                        all_frames.extend(extracted)
+                        current_step += 1
+                        self._ui_progress(current_step / total_steps)
 
-        if self.combine_videos.get():
-            all_frames = []
-            for idx, webp_file in enumerate(self.webp_files, 1):
-                self.progress_text.configure(text=f"Extracting {idx}/{len(self.webp_files)}")
-                extracted = self.extract_frames(webp_file, temp_dir, start_idx=len(all_frames))
-                all_frames.extend(extracted)
-                current_step += 1
-                self.update_progress(current_step / total_steps)
-            
-            if all_frames:
-                output_path = os.path.join(
-                    self.output_folder,
-                    f"combined_{uuid.uuid4().hex[:6]}{format_choice}"
-                )
-                self.progress_text.configure(text="Encoding combined video...")
-                self.convert_to_video(all_frames, fps, output_path, format_choice)
-                current_step += 1
-                self.update_progress(current_step / total_steps)
+                    # Check for mismatched sizes and warn before normalizing
+                    if all_frames and target_size:
+                        mismatched = []
+                        for fpath in all_frames:
+                            with Image.open(fpath) as im:
+                                if make_even(im.width, im.height) != target_size:
+                                    mismatched.append(fpath)
+                                    break  # one hit is enough to know
 
-            for frame in all_frames:
-                if os.path.exists(frame):
-                    os.remove(frame)
-        else:
-            for idx, webp_file in enumerate(self.webp_files, 1):
-                self.progress_text.configure(text=f"Extracting {idx}/{len(self.webp_files)}")
-                frames = self.extract_frames(webp_file, temp_dir)
-                current_step += 1
-                self.update_progress(current_step / total_steps)
+                        if mismatched:
+                            self.after(0, lambda: self.show_toast(
+                                f"⚠️  Mixed resolutions — resizing all to {target_size[0]}×{target_size[1]}",
+                                duration=4000, bg=AMBER,
+                            ))
+                            self._ui(self.progress_text.configure,
+                                     text=f"Normalizing to {target_size[0]}×{target_size[1]}…")
+                            for fpath in all_frames:
+                                with Image.open(fpath) as im:
+                                    if (im.width, im.height) != target_size:
+                                        im.resize(target_size, Image.LANCZOS).save(fpath)
 
-                if frames:
-                    output_path = os.path.join(
-                        self.output_folder,
-                        f"{Path(webp_file).stem}_{uuid.uuid4().hex[:6]}{format_choice}"
-                    )
-                    self.progress_text.configure(text=f"Encoding {idx}/{len(self.webp_files)}")
-                    self.convert_to_video(frames, fps, output_path, format_choice)
-                    current_step += 1
-                    self.update_progress(current_step / total_steps)
+                    if all_frames:
+                        out = os.path.join(
+                            self.output_folder,
+                            f"combined_{uuid.uuid4().hex[:6]}{format_choice}",
+                        )
+                        self._ui(self.progress_text.configure,
+                                 text="Encoding combined video…")
+                        self._convert_to_video(all_frames, fps, out, format_choice)
+                        self._ui_progress(1.0)
+                else:
+                    for idx, webp_file in enumerate(self.webp_files, 1):
+                        self._ui(self.progress_text.configure,
+                                 text=f"Extracting {idx} / {len(self.webp_files)}")
+                        frames = self._extract_frames(webp_file, temp_dir)
+                        current_step += 1
+                        self._ui_progress(current_step / total_steps)
 
-                    for frame in frames:
-                        if os.path.exists(frame):
-                            os.remove(frame)
+                        if frames:
+                            out = os.path.join(
+                                self.output_folder,
+                                f"{Path(webp_file).stem}_{uuid.uuid4().hex[:6]}{format_choice}",
+                            )
+                            self._ui(self.progress_text.configure,
+                                     text=f"Encoding {idx} / {len(self.webp_files)}")
+                            self._convert_to_video(frames, fps, out, format_choice)
+                        current_step += 1
+                        self._ui_progress(current_step / total_steps)
 
+                self._ui(self.progress_text.configure,
+                         text="Done — files saved to output folder")
+                self._ui(self.progress_bar.set, 1.0)
+                self.after(0, lambda: self._set_status("DONE", ACCENT))
+                self.after(0, lambda: self.show_toast("✅  Conversion complete!", bg=GREEN))
+
+            except Exception as e:
+                self.after(0, lambda: self.show_toast(f"❌  Error: {e}", bg=RED))
+                self._ui(self.progress_text.configure, text=f"Error: {e}")
+                self.after(0, lambda: self._set_status("ERROR", RED))
+
+            finally:
+                self._converting = False
+                self._ui(self.convert_btn.configure,
+                         state="normal",
+                         text="▶   START CONVERSION",
+                         fg_color=ACCENT)
+
+    def _ui(self, fn, *args, **kwargs):
+        self.after(0, lambda: fn(*args, **kwargs))
+
+    def _ui_progress(self, fraction: float):
+        self.after(0, lambda f=fraction: (
+            self.progress_bar.set(f),
+            self.progress_text.configure(text=f"{int(f * 100)}%"),
+        ))
+
+    # ── Frame extraction / saving ────────────
+
+    def _extract_frames(self, webp_file: str, temp_dir: Path,
+                        start_idx: int = 0) -> list[str]:
+        frames: list[str] = []
         try:
-            temp_dir.rmdir()
-        except:
-            pass
-
-        self.progress_text.configure(text="✅ Done!")
-        self.progress_bar.set(1)
-        self.show_toast("✅ Conversion completed!", bg="#225522")
-
-    def update_progress(self, fraction):
-        # smooth animation for the progress bar
-        current_value = self.progress_bar.get()
-        steps = 100
-        step_increment = (fraction - current_value) / steps
-        for i in range(steps):
-            current_value += step_increment
-            self.progress_bar.set(current_value)
-            self.progress_text.configure(text=f"{int(current_value * 100)}%")
-            self.update_idletasks()
-            self.after(10)  # smooth delay (can adjust slightly for speed)
-
-    def extract_frames(self, webp_file, temp_dir, start_idx=0):
-        frames = []
-        try:
-            all_frames = []
+            raw_frames = []
             with Image.open(webp_file) as im:
                 for frame in ImageSequence.Iterator(im):
-                    all_frames.append(frame.copy())
+                    raw_frames.append(frame.copy())
 
+            paths = [
+                temp_dir / f"frame_{start_idx + i:06d}.png"
+                for i in range(len(raw_frames))
+            ]
             with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-                futures = []
-                for i, frame in enumerate(all_frames):
-                    frame_idx = start_idx + i
-                    frame_path = temp_dir / f"frame_{frame_idx:06d}.png"
-                    futures.append(executor.submit(self.save_frame, frame, frame_path))
-                    frames.append(str(frame_path))
+                executor.map(self._save_frame, raw_frames, paths)
+            frames = [str(p) for p in paths]
         except Exception as e:
-            print(f"Error extracting frames: {e}")
+            print(f"Error extracting frames from {webp_file}: {e}")
         return frames
 
-    def save_frame(self, frame, path):
+    def _save_frame(self, frame: Image.Image, path: Path):
         try:
             preset = self.resolution_preset.get()
             if preset == "Custom":
-                width = self.custom_res_width.get()
-                height = self.custom_res_height.get()
-                if width.isdigit() and height.isdigit():
-                    target_size = (int(width), int(height))
-                    frame = frame.resize(target_size, Image.LANCZOS)
+                w = self.custom_res_width.get()
+                h = self.custom_res_height.get()
+                if w.isdigit() and h.isdigit():
+                    frame = frame.resize(make_even(int(w), int(h)), Image.LANCZOS)
             elif preset != "Same Resolution":
-                target_size = RESOLUTION_MAP.get(preset)
-                if target_size:
-                    frame = frame.resize(target_size, Image.LANCZOS)
+                target = RESOLUTION_MAP.get(preset)
+                if target:
+                    frame = frame.resize(make_even(*target), Image.LANCZOS)
+            else:
+                frame = frame.resize(make_even(frame.width, frame.height), Image.LANCZOS)
             frame.convert("RGBA").save(path)
         except Exception as e:
-            print(f"Error saving frame: {e}")
+            print(f"Error saving frame {path}: {e}")
 
-    def convert_to_video(self, frames, fps, output_path, format_choice):
-        if format_choice == ".gif":
+    # ── Video encoding ───────────────────────
+
+    def _convert_to_video(self, frames: list[str], fps: int,
+                          output_path: str, fmt: str):
+        if fmt == ".gif":
             try:
                 images = [Image.open(f).convert("RGBA") for f in frames]
                 images[0].save(
-                    output_path,
-                    save_all=True,
-                    append_images=images[1:],
-                    duration=int(1000/fps),
-                    loop=0,
-                    optimize=True,
-                    quality=95,
-                    disposal=2
+                    output_path, save_all=True, append_images=images[1:],
+                    duration=int(1000 / fps), loop=0, optimize=True, disposal=2,
                 )
             except Exception as e:
                 print(f"Error creating GIF: {e}")
+                raise
         else:
             try:
-                clip = ImageSequenceClip(frames, fps=fps)
                 codec = {
-                    ".mp4": "libx264",
-                    ".mkv": "libx264",
-                    ".webm": "libvpx-vp9"
-                }.get(format_choice, "libx264")
-
-                crf = str(self.crf_value.get())
-
+                    ".mp4":  "libx264",
+                    ".mkv":  "libx264",
+                    ".webm": "libvpx-vp9",
+                }.get(fmt, "libx264")
+                clip = ImageSequenceClip(frames, fps=fps)
                 clip.write_videofile(
-                    output_path,
-                    codec=codec,
-                    audio=False,
-                    preset="medium",
-                    ffmpeg_params=["-crf", crf, "-pix_fmt", "yuv420p"],
-                    logger=None
+                    output_path, codec=codec, audio=False, preset="medium",
+                    ffmpeg_params=["-crf", str(self.crf_value.get()),
+                                   "-pix_fmt", "yuv420p"],
+                    logger=None,
                 )
                 clip.close()
             except Exception as e:
                 print(f"Error creating video: {e}")
+                raise
 
-    def save_current_settings(self):
-        settings = {"fps": self.fps_value.get(), "format": self.output_format.get(), "output_folder": self.output_folder}
-        save_settings(settings)
+    # ── Toast notification ───────────────────
 
-    def load_previous_settings(self):
-        settings = load_settings()
-        if settings:
-            self.fps_value.set(settings.get("fps", 16))
-            self.output_format.set(settings.get("format", ".mp4"))
-            self.output_folder = settings.get("output_folder", os.getcwd())
-
-    def show_toast(self, message, duration=2500, bg="#333333"):
+    def show_toast(self, message: str, duration: int = 2800, bg: str = CARD2):
         toast = ctk.CTkToplevel(self)
         toast.overrideredirect(True)
         toast.configure(fg_color=bg)
         toast.wm_attributes("-topmost", True)
-
-        label = ctk.CTkLabel(toast, text=message, font=("Arial", 14), text_color="white")
-        label.pack(padx=20, pady=10)
-
-        x = self.winfo_x() + self.winfo_width() - 320
-        y = self.winfo_y() + self.winfo_height() - 100
-        toast.geometry(f"300x60+{x}+{y}")
-
+        ctk.CTkLabel(
+            toast, text=message,
+            font=("Segoe UI", 13, "bold"), text_color="white",
+        ).pack(padx=22, pady=12)
+        x = self.winfo_x() + self.winfo_width()  - 330
+        y = self.winfo_y() + self.winfo_height() - 80
+        toast.geometry(f"310x46+{x}+{y}")
         self.after(duration, toast.destroy)
+
 
 if __name__ == "__main__":
     app = WebPConverterApp()
