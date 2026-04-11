@@ -79,10 +79,11 @@ echo  [3/4]  Compiling — this may take a minute...
 echo.
 pyinstaller --noconsole --onefile --clean ^
   --name "WebP Converter" ^
-  --hidden-import=moviepy.video.io.ffmpeg_writer ^
-  --hidden-import=moviepy.video.compositing.CompositeVideoClip ^
+  --icon=app_icon.ico ^
+  --add-data "app_icon.ico;." ^
   --hidden-import=imageio_ffmpeg ^
   --collect-data=customtkinter ^
+  --collect-data=imageio_ffmpeg ^
   webp_converter_gui.py
 echo.
 echo  [4/4]  Cleaning up build files...

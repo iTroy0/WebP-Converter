@@ -1,7 +1,7 @@
 # WebP-Converter
 A simple, beautiful, and powerful tool to convert animated WebP images into videos (.mp4, .mkv, .webm, .gif).
 
-<h1 align="center">WebP to Video Converter 🎥✨</h1>
+<h1 align="center">WebP to Video Converter</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python Version">
@@ -11,99 +11,126 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 
 ---
 
-# 🚀 About
+## About
 
-**WebP to Video Converter** is a modern, smooth, and easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, or `.webm` `.gif` video files.
+**WebP to Video Converter** is a modern, easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, `.webm`, or `.gif` files.
 
-Built entirely in Python with a beautiful dark-themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) and fast video processing via [MoviePy](https://zulko.github.io/moviepy/) and intially [Dunttus Code](https://github.com/Dunttus/webptomp4).
+Built in Python with a dark-themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), direct FFmpeg encoding via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg), and image handling by [Pillow](https://github.com/python-pillow/Pillow). Originally based on [Dunttus' webptomp4](https://github.com/Dunttus/webptomp4).
+
 <p align="center">
   <img src="Screenshot.png"/>
 </p>
 
 ---
 
-# ✨ Features
+## Features
 
-- 🎬 Convert animated WebP images into videos
-- 🎥 Choose between `.mp4`, `.mkv`, `.webm`, `.gif`
-- 📽️ Resolution Preset Dropdown `480p`, `720p`, `1080p`, `4K` `Custom`
-- 🎛️ Set custom Frames Per Second (FPS Slider)
-- 💫 Compression Quality Setting (CRF Slider)
-- 🔗 Combine multiple WebPs into one video
-- 📺 Multithreaded Frame Extraction – Uses all CPU cores to extract frames faster from large WebP files.
-- 🌙 Modern Dark Mode UI
-- 🎯 Standalone EXE build supported
-- ▶️ Animated Preview for Selected WebP
-- ⏯️ Pause and Resume Preview Animation
-  
----
-
-# 📥 How to Use
-
-#  ▶️ Easy Version (Recommeneded For Windows Users)
-Download Windows Version : [Releases](https://github.com/iTroy0/WebP-Converter/releases)
-the application is completely portable no install or anything required.
+- Convert animated WebP images to `.mp4`, `.mkv`, `.webm`, or `.gif`
+- Resolution presets: `480p`, `720p`, `1080p`, `4K`, or custom dimensions
+- Adjustable FPS (1-60) and compression quality (CRF 18-30)
+- Combine multiple WebP files into a single output
+- Animated preview with click-to-pause
+- Cancel running conversions instantly
+- Per-file status indicators in the queue
+- Keyboard shortcuts: `Ctrl+O` add files, `Delete` remove, `Escape` cancel
+- Settings persist between sessions
+- Modern dark UI
+- Standalone EXE/binary build via PyInstaller
+- Cross-platform: Windows, macOS, Linux
 
 ---
-# 🛠️ Build your own version.
 
-1. You must have python with pip installed.
+## Quick Start (Windows)
 
-2. **Install dependencies:**
+Download the portable EXE from [Releases](https://github.com/iTroy0/WebP-Converter/releases) — no install required.
+
+---
+
+## Run From Source
+
+Requires Python 3.9+ with pip.
+
+### Windows
+
 ```bash
+# Option A: use the interactive menu
+start.bat
+
+# Option B: manual
 pip install -r requirements.txt
-```
-
-3.Run the app:
-```bash
 python webp_converter_gui.py
 ```
 
-Or simply double-click start.bat! Recommended on windows.
+### Linux / macOS
+
+```bash
+# Make the script executable (first time only)
+chmod +x start.sh
+
+# Option A: use the interactive menu
+./start.sh
+
+# Option B: manual
+pip install -r requirements.txt
+python3 webp_converter_gui.py
+```
 
 ---
 
-| File                | Purpose
-|---------------------|--------------------------
-webp_converter_gui.py | Main application
-requirements.txt      | Python dependencies
-start.bat             | Interactive menu (run/build/exit)
-README.md             | Project documentation
+## Build Standalone Binary
+
+### Windows
+
+Run `start.bat` and choose option **2** (Build Standalone EXE).
+The output will be at `dist/WebP Converter.exe`.
+
+### Linux / macOS
+
+```bash
+chmod +x start.sh
+./start.sh
+# Choose option 2
+```
+
+The output will be at `dist/WebP Converter`.
 
 ---
 
-## ☕ Support
+## Project Structure
 
-If you find this project helpful or just want to support my work, feel free to [buy me a coffee](https://buymeacoffee.com/itroy0)! Your support keeps me motivated to build and improve more awesome tools. Thank you!
-
-[![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee\&logoColor=black\&style=for-the-badge)](https://buymeacoffee.com/itroy0)
-
----
-
-
-
-❤️ Credits
-
-UI: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
-
-Video Creation: [MoviePy](https://zulko.github.io/moviepy/) 
-
-Image Handling: [Pillow](https://github.com/python-pillow/Pillow)
-
-Intial Code : [Dunttus](https://github.com/Dunttus/webptomp4).
+| File | Purpose |
+|---|---|
+| `webp_converter_gui.py` | Main application |
+| `requirements.txt` | Python dependencies |
+| `start.bat` | Interactive launcher/builder (Windows) |
+| `start.sh` | Interactive launcher/builder (Linux/macOS) |
+| `install_requirements.bat` | Quick dependency install (Windows) |
+| `app_icon.ico` | Application icon |
 
 ---
 
-📜 License
+## Support
+
+If you find this project helpful, feel free to [buy me a coffee](https://buymeacoffee.com/itroy0)!
+
+[![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/itroy0)
+
+---
+
+## Credits
+
+- UI: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
+- FFmpeg: [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)
+- Image Handling: [Pillow](https://github.com/python-pillow/Pillow)
+- Original Code: [Dunttus](https://github.com/Dunttus/webptomp4)
+
+---
+
+## License
+
 This project is licensed under the MIT License.
 Feel free to use, modify, and share!
 
 ---
 
-<p align="center"> Made with ❤️ Troy </p> ```
-
-
-
-
-
-
+<p align="center">Made with ❤️ by Troy</p>
