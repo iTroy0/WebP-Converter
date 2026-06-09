@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit 1
 
 # ── Colours ──
 CYAN='\033[1;36m'
@@ -12,7 +11,17 @@ YELLOW='\033[1;33m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-menu() {
+PIPLOG="${TMPDIR:-/tmp}/webp_converter_pip.log"
+
+# ── Locate Python ──
+PYBIN="$(command -v python3 || command -v python || true)"
+if [ -z "$PYBIN" ]; then
+  echo -e "${RED}  [ERROR] Python 3 not found on PATH.${RESET}"
+  echo "          Install it via your package manager or https://www.python.org/downloads/"
+  exit 1
+fi
+
+banner() {
   clear
   echo ""
   echo -e "${CYAN}  ╔══════════════════════════════════════════════════════╗${RESET}"
@@ -24,7 +33,7 @@ menu() {
   echo -e "${CYAN}  ║        ░░╚██╔╝░╚██╔╝░███████╗██████╦╝██║░░░░░        ║${RESET}"
   echo -e "${CYAN}  ║        ░░░╚═╝░░░╚═╝░░╚══════╝╚═════╝░╚═╝░░░░░        ║${RESET}"
   echo -e "${CYAN}  ║                                                      ║${RESET}"
-  echo -e "${CYAN}  ║           WebP  →  Video  Converter  v2.0           ║${RESET}"
+  echo -e "${CYAN}  ║           WebP  →  Video  Converter  v2.2           ║${RESET}"
   echo -e "${CYAN}  ║                                                      ║${RESET}"
   echo -e "${CYAN}  ╠══════════════════════════════════════════════════════╣${RESET}"
   echo -e "${CYAN}  ║                                                      ║${RESET}"
@@ -34,17 +43,29 @@ menu() {
   echo -e "${CYAN}  ║                                                      ║${RESET}"
   echo -e "${CYAN}  ╚══════════════════════════════════════════════════════╝${RESET}"
   echo ""
-  read -rp "   Enter choice (1/2/3): " choice
-
-  case "$choice" in
-    1) run_app ;;
-    2) build_app ;;
-    3) exit_app ;;
-    *) menu ;;
-  esac
 }
 
-# ─────────────────────────────────────────
+install_deps() {
+  echo "  Syncing dependencies..."
+  if ! "$PYBIN" -m pip install -r requirements.txt >"$PIPLOG" 2>&1; then
+    echo -e "${RED}  [ERROR] Dependency install failed:${RESET}"
+    echo "  ─────────────────────────────────────────────────────"
+    cat "$PIPLOG"
+    echo "  ─────────────────────────────────────────────────────"
+    return 1
+  fi
+  echo "         Done."
+  return 0
+}
+
+pause_key() {
+  echo ""
+  echo "  ─────────────────────────────────────────────────────"
+  echo "   Press any key to return to menu."
+  echo "  ─────────────────────────────────────────────────────"
+  read -rsn1
+}
+
 run_app() {
   clear
   echo ""
@@ -52,26 +73,20 @@ run_app() {
   echo -e "${CYAN}  ║   ▶  LAUNCHING APPLICATION                          ║${RESET}"
   echo -e "${CYAN}  ╚══════════════════════════════════════════════════════╝${RESET}"
   echo ""
-
-  echo "  [1/2]  Syncing dependencies..."
-  pip install --upgrade pip > /dev/null 2>&1 || true
-  pip install -r requirements.txt > /dev/null 2>&1
-  echo "         Done."
+  echo "  [1/2]"
+  install_deps || { pause_key; return; }
   echo ""
-
   echo "  [2/2]  Starting WebP Converter..."
   echo ""
-  python3 webp_converter_gui.py || python webp_converter_gui.py
-
-  echo ""
-  echo "  ─────────────────────────────────────────────────────"
-  echo "   Application closed. Press any key to return to menu."
-  echo "  ─────────────────────────────────────────────────────"
-  read -rsn1
-  menu
+  "$PYBIN" webp_converter_gui.py
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    echo ""
+    echo -e "${YELLOW}  [WARN] Application exited with code $rc.${RESET}"
+  fi
+  pause_key
 }
 
-# ─────────────────────────────────────────
 build_app() {
   clear
   echo ""
@@ -79,16 +94,18 @@ build_app() {
   echo -e "${CYAN}  ║   ⚙  BUILDING STANDALONE BINARY                     ║${RESET}"
   echo -e "${CYAN}  ╚══════════════════════════════════════════════════════╝${RESET}"
   echo ""
-
-  echo "  [1/4]  Syncing dependencies..."
-  pip install --upgrade pip > /dev/null 2>&1 || true
-  pip install -r requirements.txt > /dev/null 2>&1
-  pip install pyinstaller > /dev/null 2>&1
-  echo "         Done."
+  echo "  [1/4]"
+  install_deps || { pause_key; return; }
+  if ! "$PYBIN" -m pip install pyinstaller >>"$PIPLOG" 2>&1; then
+    echo -e "${RED}  [ERROR] PyInstaller install failed:${RESET}"
+    cat "$PIPLOG"
+    pause_key
+    return
+  fi
   echo ""
 
   echo "  [2/4]  Removing previous build artifacts..."
-  rm -rf build dist *.spec 2>/dev/null || true
+  rm -rf build dist ./*.spec 2>/dev/null
   echo "         Done."
   echo ""
 
@@ -101,17 +118,19 @@ build_app() {
     SEP=";"
   fi
 
-  pyinstaller --noconsole --onefile --clean \
+  "$PYBIN" -m PyInstaller --noconsole --onefile --clean \
     --name "WebP Converter" \
     --add-data "app_icon.ico${SEP}." \
     --hidden-import=imageio_ffmpeg \
     --collect-data=customtkinter \
     --collect-data=imageio_ffmpeg \
+    --collect-data=tkinterdnd2 \
+    --collect-binaries=tkinterdnd2 \
     webp_converter_gui.py
 
   echo ""
   echo "  [4/4]  Cleaning up build files..."
-  rm -rf build *.spec 2>/dev/null || true
+  rm -rf build ./*.spec 2>/dev/null
   echo "         Done."
   echo ""
 
@@ -125,25 +144,22 @@ build_app() {
     echo -e "${RED}  ║   ✖  BUILD FAILED — check output above              ║${RESET}"
     echo -e "${RED}  ╚══════════════════════════════════════════════════════╝${RESET}"
   fi
-
-  echo ""
-  echo "  ─────────────────────────────────────────────────────"
-  echo "   Press any key to return to menu."
-  echo "  ─────────────────────────────────────────────────────"
-  read -rsn1
-  menu
+  pause_key
 }
 
-# ─────────────────────────────────────────
-exit_app() {
-  clear
-  echo ""
-  echo -e "${CYAN}  ╔══════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${CYAN}  ║   Goodbye!                                          ║${RESET}"
-  echo -e "${CYAN}  ╚══════════════════════════════════════════════════════╝${RESET}"
-  echo ""
-  sleep 1
-  exit 0
-}
-
-menu
+while true; do
+  banner
+  read -rp "   Enter choice (1/2/3): " choice
+  case "$choice" in
+    1) run_app ;;
+    2) build_app ;;
+    3)
+      clear
+      echo ""
+      echo -e "${CYAN}  Goodbye!${RESET}"
+      echo ""
+      exit 0
+      ;;
+    *) ;;
+  esac
+done

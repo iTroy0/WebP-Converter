@@ -26,14 +26,18 @@ Built in Python with a dark-themed UI using [CustomTkinter](https://github.com/T
 ## Features
 
 - Convert animated WebP images to `.mp4`, `.mkv`, `.webm`, or `.gif`
-- Resolution presets: `480p`, `720p`, `1080p`, `4K`, or custom dimensions
-- Adjustable FPS (1-60) and compression quality (CRF 18-30)
-- Combine multiple WebP files into a single output
-- Animated preview with click-to-pause
-- Cancel running conversions instantly
-- Per-file status indicators in the queue
-- Keyboard shortcuts: `Ctrl+O` add files, `Delete` remove, `Escape` cancel
-- Settings persist between sessions
+- **Original frame timing** — preserves each frame's real duration (variable frame rate), or force a constant FPS (1-60)
+- Resolution presets `480p` / `720p` / `1080p` / `4K` keep aspect ratio (no stretching), plus exact custom dimensions
+- Compression quality control (CRF 18-30)
+- Combine multiple WebP files into a single output — mixed sizes are letterboxed, GIF supported
+- **Drag & drop** files or folders straight into the window
+- Live progress with real encode percentage
+- Animated preview with checkerboard transparency, real timing, and click/Space to pause
+- Cancel running conversions instantly — no partial files left behind
+- Per-file status indicators and rich metadata (size, dimensions, frames, duration) in the queue
+- Clean output names (`name.mp4`, `name (1).mp4`, …) — no random suffixes
+- Keyboard shortcuts: `Ctrl+O` add files, `Ctrl+Enter` convert, `Space` pause preview, `Delete` remove, `Escape` cancel
+- Settings and window size persist between sessions
 - Modern dark UI
 - Standalone EXE/binary build via PyInstaller
 - Cross-platform: Windows, macOS, Linux

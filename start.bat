@@ -1,7 +1,26 @@
 @echo off
+setlocal EnableExtensions
 title WebP Converter
 color 0B
 chcp 65001 >nul 2>&1
+
+set "PIPLOG=%TEMP%\webp_converter_pip.log"
+
+:: ── Locate Python ─────────────────────────
+set "PY="
+py -3 -c "import sys" >nul 2>&1 && set "PY=py -3"
+if not defined PY (
+    python -c "import sys" >nul 2>&1 && set "PY=python"
+)
+if not defined PY (
+    echo.
+    echo  [ERROR] Python 3 not found on PATH.
+    echo          Install it from https://www.python.org/downloads/
+    echo          and tick "Add python.exe to PATH" during setup.
+    echo.
+    pause
+    exit /b 1
+)
 
 :menu
 cls
@@ -15,7 +34,7 @@ echo  ║        ░░████╔═████║░██╔══╝░
 echo  ║        ░░╚██╔╝░╚██╔╝░███████╗██████╦╝██║░░░░░        ║
 echo  ║        ░░░╚═╝░░░╚═╝░░╚══════╝╚═════╝░╚═╝░░░░░        ║
 echo  ║                                                      ║
-echo  ║           WebP  →  Video  Converter  v2.0           ║
+echo  ║           WebP  →  Video  Converter  v2.2           ║
 echo  ║                                                      ║
 echo  ╠══════════════════════════════════════════════════════╣
 echo  ║                                                      ║
@@ -41,13 +60,24 @@ echo  ║   ▶  LAUNCHING APPLICATION                          ║
 echo  ╚══════════════════════════════════════════════════════╝
 echo.
 echo  [1/2]  Syncing dependencies...
-pip install --upgrade pip >nul 2>&1
-pip install -r requirements.txt >nul 2>&1
+%PY% -m pip install -r requirements.txt >"%PIPLOG%" 2>&1
+if errorlevel 1 (
+    echo         [ERROR] Dependency install failed:
+    echo  ─────────────────────────────────────────────────────
+    type "%PIPLOG%"
+    echo  ─────────────────────────────────────────────────────
+    pause
+    goto menu
+)
 echo         Done.
 echo.
 echo  [2/2]  Starting WebP Converter...
 echo.
-python webp_converter_gui.py
+%PY% webp_converter_gui.py
+if errorlevel 1 (
+    echo.
+    echo  [WARN] Application exited with an error (code %ERRORLEVEL%^).
+)
 echo.
 echo  ─────────────────────────────────────────────────────
 echo   Application closed. Press any key to return to menu.
@@ -64,9 +94,20 @@ echo  ║   ⚙  BUILDING STANDALONE EXE                        ║
 echo  ╚══════════════════════════════════════════════════════╝
 echo.
 echo  [1/4]  Syncing dependencies...
-pip install --upgrade pip >nul 2>&1
-pip install -r requirements.txt >nul 2>&1
-pip install pyinstaller >nul 2>&1
+%PY% -m pip install -r requirements.txt >"%PIPLOG%" 2>&1
+if errorlevel 1 (
+    echo         [ERROR] Dependency install failed:
+    type "%PIPLOG%"
+    pause
+    goto menu
+)
+%PY% -m pip install pyinstaller >>"%PIPLOG%" 2>&1
+if errorlevel 1 (
+    echo         [ERROR] PyInstaller install failed:
+    type "%PIPLOG%"
+    pause
+    goto menu
+)
 echo         Done.
 echo.
 echo  [2/4]  Removing previous build artifacts...
@@ -77,13 +118,15 @@ echo         Done.
 echo.
 echo  [3/4]  Compiling — this may take a minute...
 echo.
-pyinstaller --noconsole --onefile --clean ^
+%PY% -m PyInstaller --noconsole --onefile --clean ^
   --name "WebP Converter" ^
   --icon=app_icon.ico ^
   --add-data "app_icon.ico;." ^
   --hidden-import=imageio_ffmpeg ^
   --collect-data=customtkinter ^
   --collect-data=imageio_ffmpeg ^
+  --collect-data=tkinterdnd2 ^
+  --collect-binaries=tkinterdnd2 ^
   webp_converter_gui.py
 echo.
 echo  [4/4]  Cleaning up build files...
@@ -117,4 +160,4 @@ echo  ║   Goodbye!                                          ║
 echo  ╚══════════════════════════════════════════════════════╝
 echo.
 timeout /t 1 >nul
-exit
+exit /b 0
