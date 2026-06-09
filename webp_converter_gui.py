@@ -610,6 +610,7 @@ class WebPConverterApp(_AppBase):
             width=380, height=240,
         )
         self.preview_label.pack(padx=16, pady=(10, 2))
+        self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
 
         self.preview_info = ctk.CTkLabel(
             prev_card, text="", font=FONT_MONO, text_color=TEXT_DIM,
@@ -1049,11 +1050,25 @@ class WebPConverterApp(_AppBase):
 
     def _clear_preview(self):
         self._stop_preview()
+        self._detach_preview_image()
         self.preview_frames = []
         self.preview_label.configure(image=None, text="Select a file to preview",
                                      cursor="arrow")
-        self.preview_label.image = None
         self.preview_info.configure(text="")
+
+    def _detach_preview_image(self):
+        """Drop the photo image from the underlying tk label while it still exists.
+
+        CTkLabel.configure(image=None) leaves the old PhotoImage name set on the
+        internal tk label; once the old frames are garbage-collected that name is
+        deleted from the Tk interpreter and every later configure on the label
+        raises 'image "pyimageN" doesn't exist'.
+        """
+        try:
+            self.preview_label._label.configure(image="")
+        except (AttributeError, tk.TclError):
+            pass
+        self.preview_label.image = None
 
     def open_output_folder(self):
         if not os.path.isdir(self.output_folder):
@@ -1075,8 +1090,9 @@ class WebPConverterApp(_AppBase):
         self._stop_preview()
         self._preview_gen += 1
         gen = self._preview_gen
+        self._detach_preview_image()
+        self.preview_frames = []
         self.preview_label.configure(image=None, text="Loading preview…")
-        self.preview_label.image = None
         self.preview_info.configure(text="")
         threading.Thread(
             target=self._load_preview_frames, args=(filepath, gen), daemon=True
@@ -1119,7 +1135,6 @@ class WebPConverterApp(_AppBase):
             self.preview_running = True
             self._update_preview_info()
             self._animate_preview()
-            self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
 
     def _update_preview_info(self):
         n = len(self.preview_frames)
