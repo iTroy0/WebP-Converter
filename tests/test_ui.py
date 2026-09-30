@@ -239,6 +239,46 @@ class UITest(AppFixture, unittest.TestCase):
         # Unlocking must not revive the rate slider while timing is Original.
         self.assertEqual(self.state(app.fps_slider), "disabled")
 
+    def test_chosen_segment_label_is_primary_text(self):
+        # Contrast relies on this: DIM on the thumb would be under 4.5:1.
+        app = self.app
+        try:
+            for fmt in G.VALID_FORMATS:
+                app.output_format.set(fmt)
+                for value, button in app.format_seg._buttons_dict.items():
+                    self.assertEqual(button.cget("text_color"),
+                                     G.TEXT if value == fmt else G.DIM, (fmt, value))
+        finally:
+            app.output_format.set(".mp4")
+
+    def test_no_readable_label_uses_faint(self):
+        # FAINT is for disabled states only, so enable everything first.
+        app = self.app
+        app._timing_mode.set("Fixed FPS")
+        app._on_timing_mode("Fixed FPS")
+        app.resolution_preset.set("Custom")
+        app.toggle_custom_res_entry("Custom")
+        try:
+            offenders = []
+
+            def walk(widget):
+                for child in widget.winfo_children():
+                    if isinstance(child, G.ctk.CTkLabel):
+                        text = child.cget("text").strip()
+                        # "×" between the custom size fields is decorative.
+                        if text and text != "×" and child.cget("text_color") == G.FAINT:
+                            offenders.append(text)
+                    walk(child)
+
+            walk(app)
+            self.assertEqual(offenders, [])
+            self.assertEqual(app.custom_res_width.cget("placeholder_text_color"), G.DIM)
+        finally:
+            app._timing_mode.set("Original")
+            app._on_timing_mode("Original")
+            app.resolution_preset.set("Same Resolution")
+            app.toggle_custom_res_entry("Same Resolution")
+
     def test_toasts_are_capped(self):
         app = self.app
         for kind in ("info", "ok", "warn", "err", "info"):

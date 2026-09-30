@@ -129,11 +129,15 @@ SELECTED   = ("#E7ECFD", "#1C2240")   # selected queue row
 # accent is kept for the primary action, sliders, the selected file and focus.
 SEG_TRACK  = ("#E9E9EE", "#1C1C21")
 SEG_THUMB  = ("#FFFFFF", "#393943")
-SEG_HOVER  = ("#F3F3F6", "#29292F")
+SEG_HOVER  = ("#F3F3F6", "#25252B")
 
+# Text tiers. TEXT and DIM meet 4.5:1 on every surface above; hierarchy
+# between labels and hints comes from size, not from dropping below that.
+# FAINT is only for disabled states, decorative marks and icon glyphs, which
+# need 3:1 — never for text someone has to read (see tests/test_contrast.py).
 TEXT       = ("#16161A", "#ECECF0")   # primary copy
-DIM        = ("#67676F", "#8D8D96")   # labels, metadata
-FAINT      = ("#7E7E88", "#6E6E78")   # hints, placeholders
+DIM        = ("#67676F", "#8D8D96")   # labels, hints, metadata
+FAINT      = ("#7E7E88", "#6E6E78")   # disabled, decorative, icon glyphs
 
 ACCENT     = ("#3355E8", "#4463FA")   # interactive fill; ≥4.8:1 with white
 ACCENT_HI  = ("#2843C4", "#3A55E0")   # accent hover
@@ -439,7 +443,7 @@ def form_label(parent, text, row):
 def hint(parent, text):
     # height=1: size to the text; CTk's default 28px label height is dead space.
     return ctk.CTkLabel(parent, text=text, font=F.small, height=1,
-                        text_color=FAINT, anchor="w", justify="left")
+                        text_color=DIM, anchor="w", justify="left")
 
 
 # ─────────────────────────────────────────────
@@ -662,7 +666,7 @@ class WebPConverterApp(_AppBase):
         self.source_column = frame
 
         self.queue_count_label = ctk.CTkLabel(head, text="", font=F.mono,
-                                              text_color=FAINT, height=1)
+                                              text_color=DIM, height=1)
         self.queue_count_label.pack(side="left", padx=(S_SM, 0))
         self.clear_all_btn = text_button(head, "Clear", self.clear_file_list)
         self.clear_all_btn.pack(side="right")
@@ -712,7 +716,7 @@ class WebPConverterApp(_AppBase):
             font=F.body_b, text_color=TEXT)
         self.drop_title.pack()
         self.drop_hint = ctk.CTkLabel(inner, text="or click to browse  ·  Ctrl+O",
-                                      font=F.small, text_color=FAINT)
+                                      font=F.small, text_color=DIM)
         self.drop_hint.pack()
 
         for w in (self.drop_zone, inner, self.drop_glyph,
@@ -770,14 +774,14 @@ class WebPConverterApp(_AppBase):
 
         self.preview_label = ctk.CTkLabel(
             self.preview_well, text="Select a file to preview",
-            font=F.small, text_color=FAINT, fg_color="transparent")
+            font=F.small, text_color=DIM, fg_color="transparent")
         self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
         self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
 
         # Fixed wrap width: a status line must never push the column wider,
         # or the well moves under frames that were just fitted to it.
         self.preview_info = ctk.CTkLabel(body, text="", font=F.mono,
-                                         text_color=FAINT, justify="center",
+                                         text_color=DIM, justify="center",
                                          wraplength=PREVIEW_MIN[0], height=1)
         self.preview_info.pack(fill="x", pady=(S_MD, 0))
         return frame
@@ -821,7 +825,7 @@ class WebPConverterApp(_AppBase):
         self.custom_res_width = ctk.CTkEntry(
             entries, width=84, placeholder_text="Width",
             fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
-            placeholder_text_color=FAINT, text_color=TEXT,
+            placeholder_text_color=DIM, text_color=TEXT,
             font=F.body, corner_radius=R_CTRL, height=H_MINI)
         self.custom_res_width.pack(side="left")
         ctk.CTkLabel(entries, text="×", font=F.body,
@@ -829,7 +833,7 @@ class WebPConverterApp(_AppBase):
         self.custom_res_height = ctk.CTkEntry(
             entries, width=84, placeholder_text="Height",
             fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
-            placeholder_text_color=FAINT, text_color=TEXT,
+            placeholder_text_color=DIM, text_color=TEXT,
             font=F.body, corner_radius=R_CTRL, height=H_MINI)
         self.custom_res_height.pack(side="left")
         hint(entries, "px").pack(side="left", padx=(S_SM, 0))
