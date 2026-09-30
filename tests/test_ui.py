@@ -165,9 +165,15 @@ class UITest(AppFixture, unittest.TestCase):
         self.app.toggle_custom_res_entry("Same Resolution")
 
     def test_size_fields_keep_visible_labels(self):
-        app = self.app
-        labels = [w.cget("text") for w in app.custom_res_width.master.winfo_children()
-                  if isinstance(w, G.ctk.CTkLabel)]
+        labels = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, G.ctk.CTkLabel):
+                    labels.append(child.cget("text"))
+                walk(child)
+
+        walk(self.app.custom_res_row)
         self.assertIn("W", labels)
         self.assertIn("H", labels)
 

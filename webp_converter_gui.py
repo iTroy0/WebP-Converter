@@ -145,6 +145,7 @@ ACCENT     = ("#3355E8", "#4463FA")   # interactive fill; ≥4.8:1 with white
 ACCENT_HI  = ("#2843C4", "#3A55E0")   # accent hover
 ACCENT_TX  = ("#2843C4", "#8FA2FF")   # accent-coloured text on SURFACE
 ON_ACCENT  = "#FFFFFF"
+FOCUS      = ACCENT_TX                # keyboard focus ring (≥7.6:1 on SURFACE)
 
 OK         = ("#137A3C", "#3DB86A")
 WARN       = ("#9A6207", "#D9922B")
@@ -176,6 +177,15 @@ SEG_INSET = 3   # track visible around the thumb
 S_XS, S_SM, S_MD, S_LG, S_XL = 4, 8, 12, 16, 24
 PAD_X, PAD_Y = 16, 14
 BORDER_W = 1
+
+# Keyboard focus shows as a ring RING_W thick, RING_GAP outside the control,
+# concentric with its corners (radius + RING). Every focusable control sits
+# in a holder inset by RING, so the ring needs no layout change to appear —
+# it occupies space the row gap already had (ROW_GAP is the visible gap).
+RING_W, RING_GAP = 2, 1
+RING = RING_W + RING_GAP
+ROW_GAP = S_SM
+ROW_PAD = (0, ROW_GAP - 2 * RING)
 
 LABEL_COL = 74   # width of the form label column
 HINT_WRAP = 264  # narrower than the output control column: hints never widen it
@@ -359,6 +369,28 @@ def short_path(path: str, limit: int = 52) -> str:
 # Widget factories — the single source of style
 # ─────────────────────────────────────────────
 
+def ringed(parent, build, radius=R_CTRL, **pack):
+    """Build a control inside a focus-ring holder; returns (holder, control).
+
+    The holder draws nothing until its control has keyboard focus, so it
+    works over any background (see WebPConverterApp._focusable).
+    """
+    holder = ctk.CTkFrame(parent, fg_color="transparent",
+                          corner_radius=radius + RING,
+                          border_width=0, border_color=FOCUS)
+    control = build(holder)
+    control.pack(padx=RING, pady=RING, **pack)
+    return holder, control
+
+
+def _is_enabled(widget) -> bool:
+    try:
+        return str(widget.cget("state")) != "disabled"
+    except (ValueError, tk.TclError, AttributeError):
+        # CTkSegmentedButton accepts state in configure but not in cget.
+        return getattr(widget, "_state", "normal") != "disabled"
+
+
 def column(parent, title: str = "", fill=SURFACE):
     """A full-height layout column. Returns (frame, head, body).
 
@@ -366,17 +398,20 @@ def column(parent, title: str = "", fill=SURFACE):
     hairline dividers. head is the title row (None without a title), where a
     column's own actions sit on the right.
     """
+    # Padding is short by RING: focus-ring holders inset their controls by
+    # RING, so controls' visible edges land on PAD_X. Unringed content (the
+    # title, labels, hints) is inset by RING itself to share that edge.
     frame = ctk.CTkFrame(parent, fg_color=fill, corner_radius=0, border_width=0)
     head = None
     if title:
-        head = ctk.CTkFrame(frame, fg_color="transparent", height=H_MINI)
-        head.pack(fill="x", padx=PAD_X, pady=(PAD_Y, 0))
+        head = ctk.CTkFrame(frame, fg_color="transparent", height=H_MINI + 2 * RING)
+        head.pack(fill="x", padx=PAD_X - RING, pady=(PAD_Y - RING, 0))
         head.pack_propagate(False)       # same height with or without actions
         ctk.CTkLabel(head, text=title, font=F.title, text_color=TEXT,
-                     height=1).pack(side="left")
+                     height=1).pack(side="left", padx=(RING, 0))
     body = ctk.CTkFrame(frame, fg_color="transparent")
-    body.pack(fill="both", expand=True, padx=PAD_X,
-              pady=(S_MD if title else PAD_Y, PAD_Y))
+    body.pack(fill="both", expand=True, padx=PAD_X - RING,
+              pady=(S_MD - 2 * RING if title else PAD_Y - RING, PAD_Y - RING))
     return frame, head, body
 
 
@@ -520,8 +555,8 @@ class Tooltip:
 
 def form_label(parent, text, row):
     lbl = ctk.CTkLabel(parent, text=text, font=F.body,
-                       text_color=DIM, anchor="w", width=LABEL_COL)
-    lbl.grid(row=row, column=0, sticky="w", pady=(0, S_SM))
+                       text_color=DIM, anchor="w", width=LABEL_COL - RING)
+    lbl.grid(row=row, column=0, sticky="w", pady=ROW_PAD, padx=(RING, 0))
     return lbl
 
 
@@ -628,7 +663,8 @@ class WebPConverterApp(_AppBase):
         # Keyboard shortcuts
         self.bind("<Control-o>", lambda _e: self.select_webps())
         self.bind("<Control-Return>", lambda _e: self.start_conversion())
-        self.bind("<Delete>", lambda _e: self._remove_selected())
+        self.bind("<Delete>", self._on_delete)
+        self.bind("<ButtonPress-1>", self._on_click_anywhere, add="+")
         self.bind("<Escape>", lambda _e: self._request_cancel())
         self.bind("<space>", self._on_space)
 
@@ -718,27 +754,30 @@ class WebPConverterApp(_AppBase):
         self.progress_bar.pack(side="top", fill="x")
         self._apply_progress(0)
 
+        # Short by RING on each side: the buttons sit in focus-ring holders.
         row = ctk.CTkFrame(bar, fg_color="transparent")
-        row.pack(fill="x", padx=PAD_X, pady=S_MD)
+        row.pack(fill="x", padx=PAD_X - RING, pady=S_MD - RING)
 
         ctk.CTkLabel(row, text="Output", font=F.body, text_color=DIM,
-                     height=1).pack(side="left")
+                     height=1).pack(side="left", padx=(RING, 0))
         self.output_folder_label = ctk.CTkLabel(
             row, text="", font=F.mono, text_color=ACCENT_TX,
             anchor="w", cursor="hand2", height=1)
-        self.output_folder_label.pack(side="left", padx=(S_SM, S_MD))
+        self.output_folder_label.pack(side="left", padx=(S_SM, S_MD - RING))
         self.output_folder_label.bind("<Button-1>",
                                       lambda _e: self.open_output_folder())
-        self.output_folder_btn = secondary_button(
-            row, "Change", self.select_output_folder, height=H_MINI, width=1)
-        self.output_folder_btn.pack(side="left")
+        ring, self.output_folder_btn = ringed(row, lambda h: secondary_button(
+            h, "Change", self.select_output_folder, height=H_MINI, width=1))
+        ring.pack(side="left")
+        self._focus_button(ring, self.output_folder_btn)
 
-        self.convert_btn = primary_button(
-            row, "▶   Convert", self.start_conversion, height=H_CTA, width=176)
-        self.convert_btn.pack(side="right")
+        ring, self.convert_btn = ringed(row, lambda h: primary_button(
+            h, "▶   Convert", self.start_conversion, height=H_CTA, width=176))
+        ring.pack(side="right")
+        self._focus_button(ring, self.convert_btn)
         self.status_text = ctk.CTkLabel(row, text="Ready", font=F.body,
                                         text_color=DIM, height=1)
-        self.status_text.pack(side="right", padx=(0, S_LG))
+        self.status_text.pack(side="right", padx=(0, S_LG - RING))
         self.status_dot = ctk.CTkLabel(row, text="●", font=F.small,
                                        text_color=DIM, height=1)
         self.status_dot.pack(side="right", padx=(0, S_SM))
@@ -763,29 +802,35 @@ class WebPConverterApp(_AppBase):
         self.queue_count_label = ctk.CTkLabel(head, text="", font=F.mono,
                                               text_color=DIM, height=1)
         self.queue_count_label.pack(side="left", padx=(S_SM, 0))
-        self.clear_all_btn = text_button(head, "Clear", self.clear_file_list)
-        self.clear_all_btn.pack(side="right")
+        ring, self.clear_all_btn = ringed(
+            head, lambda h: text_button(h, "Clear", self.clear_file_list))
+        ring.pack(side="right")
+        self._focus_button(ring, self.clear_all_btn)
 
         # Equal halves via a uniform grid; width=1 so the buttons ask only for
         # their text, not CTk's 140px default, and never widen the column.
         add_row = ctk.CTkFrame(body, fg_color="transparent")
         add_row.pack(fill="x")
         add_row.columnconfigure((0, 1), weight=1, uniform="add")
-        self.add_files_btn = secondary_button(
-            add_row, "+  Add files", self.select_webps, height=H_MINI, width=1)
-        self.add_files_btn.grid(row=0, column=0, sticky="ew", padx=(0, S_SM // 2))
-        self.add_folder_btn = secondary_button(
-            add_row, "Add folder", self.select_folder_of_webps,
-            height=H_MINI, width=1)
-        self.add_folder_btn.grid(row=0, column=1, sticky="ew", padx=(S_SM // 2, 0))
+        ring, self.add_files_btn = ringed(add_row, lambda h: secondary_button(
+            h, "+  Add files", self.select_webps, height=H_MINI, width=1), fill="x")
+        ring.grid(row=0, column=0, sticky="ew", padx=(0, S_SM // 2 - RING))
+        self._focus_button(ring, self.add_files_btn)
+        ring, self.add_folder_btn = ringed(add_row, lambda h: secondary_button(
+            h, "Add folder", self.select_folder_of_webps, height=H_MINI, width=1),
+            fill="x")
+        ring.grid(row=0, column=1, sticky="ew", padx=(S_SM // 2 - RING, 0))
+        self._focus_button(ring, self.add_folder_btn)
         self._tips["add_files"] = Tooltip(self, [self.add_files_btn],
                                           "Add .webp files  ·  Ctrl+O")
 
         # The list area shows the queue — or, while it's empty, a large drop
         # target. update_files_list swaps them, so the target never takes
-        # space away from a real queue.
-        self.list_area = ctk.CTkFrame(body, fg_color="transparent")
-        self.list_area.pack(fill="both", expand=True, pady=(S_MD, 0))
+        # space away from a real queue. It is also the focus ring for both.
+        self.list_area = ctk.CTkFrame(body, fg_color="transparent",
+                                      corner_radius=R_PANEL + RING,
+                                      border_width=0, border_color=FOCUS)
+        self.list_area.pack(fill="both", expand=True, pady=(S_MD - 2 * RING, 0))
 
         # Queue — small requested height: it expands into whatever the column
         # offers, and must not be what sets the window's minimum height.
@@ -822,6 +867,18 @@ class WebPConverterApp(_AppBase):
             w.bind("<Button-1>", lambda _e: self.select_webps())
             w.bind("<Enter>", lambda _e: self._hover_drop(True))
             w.bind("<Leave>", lambda _e: self._hover_drop(False))
+
+        # Keyboard: the queue walks with arrows; the empty drop target
+        # browses on Space/Enter. Only one of them is ever on screen.
+        self._focusable(self.list_area, self.files_list_frame, {
+            "<Up>": lambda: self._select_offset(-1),
+            "<Down>": lambda: self._select_offset(1),
+            "<Home>": lambda: self._select_index(0),
+            "<End>": lambda: self._select_index(-1),
+        }, enabled=lambda: bool(self.webp_files))
+        self._focusable(self.list_area, self.drop_zone, {
+            "<space>": self.select_webps, "<Return>": self.select_webps,
+        }, enabled=lambda: not self._locked)
         return frame
 
     def _hover_drop(self, on: bool):
@@ -893,11 +950,12 @@ class WebPConverterApp(_AppBase):
 
     def _build_output(self, parent):
         out_frame, head, form = column(parent, "Output")
-        self.theme_btn = ghost_button(
-            head, "☾" if self._theme == "dark" else "☀",
-            self._toggle_theme, size=H_MINI)
+        ring, self.theme_btn = ringed(head, lambda h: ghost_button(
+            h, "☾" if self._theme == "dark" else "☀",
+            self._toggle_theme, size=H_MINI))
         self.theme_btn.configure(text_color=DIM)
-        self.theme_btn.pack(side="right")
+        ring.pack(side="right")
+        self._focus_button(ring, self.theme_btn)
         self._tips["theme"] = Tooltip(
             self, [self.theme_btn],
             lambda: f"Switch to {'light' if self._theme == 'dark' else 'dark'} theme")
@@ -907,21 +965,25 @@ class WebPConverterApp(_AppBase):
 
         # Format
         form_label(form, "Format", 0)
-        self.format_seg = segmented(form, list(VALID_FORMATS), self.output_format,
-                                    lambda _fmt: self._sync_controls())
-        self.format_seg.grid(row=0, column=1, sticky="ew", pady=(0, S_SM))
+        format_changed = lambda _fmt: self._sync_controls()
+        ring, self.format_seg = ringed(form, lambda h: segmented(
+            h, list(VALID_FORMATS), self.output_format, format_changed), fill="x")
+        ring.grid(row=0, column=1, sticky="ew", pady=ROW_PAD)
+        self._focus_segmented(ring, self.format_seg, self.output_format, format_changed)
 
         # Size
         form_label(form, "Size", 1)
-        self.res_menu = ctk.CTkOptionMenu(
-            form, values=list(VALID_RESOLUTIONS),
+        ring, self.res_menu = ringed(form, lambda h: ctk.CTkOptionMenu(
+            h, values=list(VALID_RESOLUTIONS),
             variable=self.resolution_preset, command=self.toggle_custom_res_entry,
             fg_color=RAISED, button_color=RAISED, button_hover_color=HOVER,
             text_color=TEXT, font=F.body,
             dropdown_fg_color=SURFACE, dropdown_hover_color=HOVER,
             dropdown_text_color=TEXT, dropdown_font=F.body,
-            corner_radius=R_CTRL, height=H_CTRL)
-        self.res_menu.grid(row=1, column=1, sticky="ew", pady=(0, S_SM))
+            corner_radius=R_CTRL, height=H_CTRL), fill="x")
+        ring.grid(row=1, column=1, sticky="ew", pady=ROW_PAD)
+        self._focus_option(ring, self.res_menu, self.resolution_preset,
+                           self.toggle_custom_res_entry)
 
         # W/H labels stay visible while typing (a placeholder alone vanishes).
         # The hint beneath doubles as the error line, so errors appear next to
@@ -940,43 +1002,53 @@ class WebPConverterApp(_AppBase):
         # Quality and Timing share one shape: a mode switch, then the slider it
         # governs. The slider's readout carries its unit, so it needs no label.
         form_label(form, "Quality", 3)
-        self.quality_seg = segmented(form, ["Compressed", "Lossless"],
-                                     self._quality_mode, self._on_quality_mode)
-        self.quality_seg.grid(row=3, column=1, sticky="ew", pady=(0, S_SM))
+        ring, self.quality_seg = ringed(form, lambda h: segmented(
+            h, ["Compressed", "Lossless"], self._quality_mode,
+            self._on_quality_mode), fill="x")
+        ring.grid(row=3, column=1, sticky="ew", pady=ROW_PAD)
+        self._focus_segmented(ring, self.quality_seg, self._quality_mode,
+                              self._on_quality_mode)
         self.crf_slider = self._slider_row(
             form, row=4, var=self.crf_value, from_=18, to=30, steps=12,
             suffix="CRF", attr="crf_label")
 
         # The hint changes with format and mode; reserving two lines up front
         # keeps the rows below from jumping when it does.
+        hint_gap = S_MD - RING           # the Timing control below is ringed
         self.quality_hint = hint(form, "\n")
         self.quality_hint.configure(wraplength=HINT_WRAP)
-        self.quality_hint.grid(row=5, column=1, sticky="nw", pady=(0, S_MD))
+        self.quality_hint.grid(row=5, column=1, sticky="nw",
+                               pady=(0, hint_gap), padx=(RING, 0))
         form.update_idletasks()
         # Physical pixels on both sides: the measured height, and CTk's pady
         # after scaling (row minsize is a raw Tk value).
         scale = ctk.ScalingTracker.get_widget_scaling(form)
         form.rowconfigure(5, minsize=self.quality_hint.winfo_reqheight()
-                                     + round(S_MD * scale))
+                                     + round(hint_gap * scale))
 
         form_label(form, "Timing", 6)
-        self.timing_seg = segmented(form, ["Original", "Fixed FPS"],
-                                    self._timing_mode, self._on_timing_mode)
-        self.timing_seg.grid(row=6, column=1, sticky="ew", pady=(0, S_SM))
+        ring, self.timing_seg = ringed(form, lambda h: segmented(
+            h, ["Original", "Fixed FPS"], self._timing_mode,
+            self._on_timing_mode), fill="x")
+        ring.grid(row=6, column=1, sticky="ew", pady=ROW_PAD)
+        self._focus_segmented(ring, self.timing_seg, self._timing_mode,
+                              self._on_timing_mode)
         self.fps_slider = self._slider_row(
             form, row=7, var=self.fps_value, from_=1, to=60, steps=59,
-            suffix="FPS", attr="fps_label", pady=(0, S_MD))
+            suffix="FPS", attr="fps_label", pady=(0, S_MD - 2 * RING))
 
         # Combine
-        self.combine_check = ctk.CTkCheckBox(
-            form, text="Combine all files into a single output",
+        ring, self.combine_check = ringed(form, lambda h: ctk.CTkCheckBox(
+            h, text="Combine all files into a single output",
             variable=self.combine_videos,
             text_color=TEXT, font=F.body,
             checkmark_color=ON_ACCENT, fg_color=ACCENT, hover_color=ACCENT_HI,
             border_color=LINE, border_width=BORDER_W,
             corner_radius=R_CHECK,
-            checkbox_width=18, checkbox_height=18)
-        self.combine_check.grid(row=8, column=0, columnspan=2, sticky="w")
+            checkbox_width=18, checkbox_height=18))
+        ring.grid(row=8, column=0, columnspan=2, sticky="w")
+        self._focusable(ring, self.combine_check,
+                        {"<space>": self.combine_check.toggle})
 
         return out_frame
 
@@ -984,13 +1056,15 @@ class WebPConverterApp(_AppBase):
         ctk.CTkLabel(parent, text=label, font=F.body, text_color=DIM,
                      height=1).pack(side="left", padx=(pad_left, S_SM))
         # Filled like the other controls; the border is drawn in the fill
-        # colour until it has something to say (an error).
-        entry = ctk.CTkEntry(
-            parent, width=76, placeholder_text=example,
+        # colour until it has something to say (an error). Focus is the
+        # holder's ring, so an error border and a focus ring never compete.
+        ring, entry = ringed(parent, lambda h: ctk.CTkEntry(
+            h, width=76, placeholder_text=example,
             fg_color=RAISED, border_color=RAISED, border_width=BORDER_W,
             placeholder_text_color=DIM, text_color=TEXT,
-            font=F.body, corner_radius=R_CTRL, height=H_MINI)
-        entry.pack(side="left")
+            font=F.body, corner_radius=R_CTRL, height=H_MINI))
+        ring.pack(side="left")
+        self._focusable(ring, entry._entry)
         # Leaving a field flags a bad value; typing only clears or updates an
         # error already shown, so half-typed numbers ("1" on the way to
         # "128") are never flagged.
@@ -1044,26 +1118,28 @@ class WebPConverterApp(_AppBase):
         self._size_error_shown = False
 
     def _slider_row(self, parent, row, var, from_, to, steps, suffix, attr,
-                    pady=(0, S_SM)):
-        holder = ctk.CTkFrame(parent, fg_color="transparent")
-        holder.grid(row=row, column=1, sticky="ew", pady=pady)
+                    pady=(0, S_SM - RING)):
+        line = ctk.CTkFrame(parent, fg_color="transparent")
+        line.grid(row=row, column=1, sticky="ew", pady=pady)
 
-        val_lbl = ctk.CTkLabel(holder, text=f"{var.get()} {suffix}",
+        val_lbl = ctk.CTkLabel(line, text=f"{var.get()} {suffix}",
                                font=F.mono_b, text_color=ACCENT_TX,
                                width=62, height=1, anchor="e")
-        val_lbl.pack(side="right")
+        val_lbl.pack(side="right", padx=(0, RING))
         setattr(self, attr, val_lbl)
 
-        slider = ctk.CTkSlider(
-            holder, from_=from_, to=to, number_of_steps=steps, variable=var,
+        ring, slider = ringed(line, lambda h: ctk.CTkSlider(
+            h, from_=from_, to=to, number_of_steps=steps, variable=var,
             fg_color=LINE, progress_color=ACCENT,
             button_color=ACCENT, button_hover_color=ACCENT_HI,
             corner_radius=R_PILL,
-            height=H_SLIDER, border_width=SLIDER_INSET)
-        slider.pack(side="left", fill="x", expand=True, padx=(0, S_MD))
-        slider.configure(
-            command=lambda v, lbl=val_lbl, sfx=suffix:
-                self._on_slider_change(lbl, sfx, v))
+            height=H_SLIDER, border_width=SLIDER_INSET), fill="x")
+        ring.pack(side="left", fill="x", expand=True, padx=(0, S_MD - RING))
+
+        def changed(value, lbl=val_lbl, sfx=suffix):
+            self._on_slider_change(lbl, sfx, value)
+        slider.configure(command=changed)
+        self._focus_slider(ring, slider, var, from_, to, changed)
         return slider
 
     def _on_slider_change(self, lbl, suffix, value):
@@ -1124,6 +1200,120 @@ class WebPConverterApp(_AppBase):
                            not (locked or self.use_source_timing.get()))
         self.quality_hint.configure(text=self._quality_hint())
         self._refresh_meta_labels()
+
+    # ── Keyboard ─────────────────────────────
+    # CTk widgets have no keyboard support, so each focusable control gets
+    # it here: a place in the Tab order (skipped while disabled), a ring
+    # while focused, and its keys. Tab order is creation order, which follows
+    # the visual order: Source, Output, then the action bar.
+
+    def _focusable(self, holder, target, keys=None, enabled=None):
+        """target: the Tk widget that takes focus — a CTk widget's own frame,
+        or a CTkEntry's inner entry. Handlers end in "break" so a key a
+        control uses (Space on a button) never also fires a window shortcut.
+        """
+        is_enabled = enabled or (lambda: _is_enabled(target))
+        if not isinstance(target, tk.Entry):
+            # A callable takefocus replaces Tk's own visibility check, so it
+            # must do that check too — or hidden widgets stay in the Tab order.
+            tk.Frame.configure(target, takefocus=lambda _w: 1 if (
+                target.winfo_viewable() and is_enabled()) else 0)
+        tk.Misc.bind(target, "<FocusIn>",
+                     lambda _e: holder.configure(border_width=RING_W), add="+")
+        tk.Misc.bind(target, "<FocusOut>",
+                     lambda _e: holder.configure(border_width=0), add="+")
+        for sequence, action in (keys or {}).items():
+            tk.Misc.bind(target, sequence,
+                         lambda _e, act=action: (is_enabled() and act(), "break")[1])
+
+    def _focus_button(self, holder, button):
+        self._focusable(holder, button,
+                        {"<space>": button.invoke, "<Return>": button.invoke})
+
+    @staticmethod
+    def _step_value(values, current, delta):
+        values = list(values)
+        i = values.index(current) if current in values else 0
+        j = max(0, min(len(values) - 1, i + delta))
+        return values[j] if j != i else None
+
+    def _focus_segmented(self, holder, seg, variable, command):
+        def step(delta):
+            new = self._step_value(seg.cget("values"), variable.get(), delta)
+            if new is not None:
+                seg.set(new)
+                if command:
+                    command(new)
+        self._focusable(holder, seg, {"<Left>": lambda: step(-1),
+                                      "<Right>": lambda: step(1)})
+
+    def _focus_slider(self, holder, slider, var, lo, hi, on_change):
+        def nudge(delta):
+            value = max(lo, min(hi, int(round(var.get())) + delta))
+            slider.set(value)
+            on_change(value)
+        self._focusable(holder, slider, {
+            "<Left>": lambda: nudge(-1), "<Down>": lambda: nudge(-1),
+            "<Right>": lambda: nudge(1), "<Up>": lambda: nudge(1)})
+
+    def _focus_option(self, holder, menu, variable, command):
+        def step(delta):
+            new = self._step_value(menu.cget("values"), variable.get(), delta)
+            if new is not None:
+                variable.set(new)
+                command(new)
+
+        def open_menu():
+            try:                    # CTk has no public way to open it
+                menu._open_dropdown_menu()
+            except AttributeError:
+                pass
+        self._focusable(holder, menu, {
+            "<Up>": lambda: step(-1), "<Down>": lambda: step(1),
+            "<Return>": open_menu, "<space>": open_menu})
+
+    def _select_offset(self, delta):
+        if not self.webp_files:
+            return
+        files = self.webp_files
+        i = files.index(self.selected_file) if self.selected_file in files else -1
+        self._select_index(max(0, min(len(files) - 1, i + delta)))
+
+    def _select_index(self, index):
+        path = self.webp_files[index]
+        if path != self.selected_file:
+            self.set_selected_file(path)
+            self.show_preview(path)
+        self._scroll_into_view(self.file_rows.get(path))
+
+    def _scroll_into_view(self, row):
+        if row is None or not row.winfo_exists():
+            return
+        self.update_idletasks()
+        canvas = self.files_list_frame._parent_canvas
+        total = self.files_list_frame.winfo_height()
+        if total <= 0:
+            return
+        top, bottom = canvas.yview()
+        y0 = row.winfo_y() / total
+        y1 = (row.winfo_y() + row.winfo_height()) / total
+        if y0 < top:
+            canvas.yview_moveto(y0)
+        elif y1 > bottom:
+            canvas.yview_moveto(y1 - (bottom - top))
+
+    def _on_delete(self, event):
+        # In a text field Delete edits the text; it must not also remove the
+        # selected file from the queue. event.widget is whatever had focus.
+        if isinstance(event.widget, (tk.Entry, tk.Text)):
+            return
+        self._remove_selected()
+
+    def _on_click_anywhere(self, event):
+        # Rings show keyboard focus, not the last thing clicked — the same
+        # rule as the web's :focus-visible. Text fields keep click focus.
+        if not isinstance(event.widget, (tk.Entry, tk.Text)):
+            self.focus_set()
 
     # ── Theme ────────────────────────────────
 
@@ -1198,7 +1388,8 @@ class WebPConverterApp(_AppBase):
 
     def toggle_custom_res_entry(self, choice):
         if choice == "Custom":
-            self.custom_res_row.grid(row=2, column=1, sticky="w", pady=(0, S_SM))
+            self.custom_res_row.grid(row=2, column=1, sticky="w",
+                                     pady=(0, S_SM - RING), padx=(RING, 0))
         else:
             self.custom_res_row.grid_remove()
             self._clear_size_errors()      # a hidden field can't show its error
@@ -1409,10 +1600,10 @@ class WebPConverterApp(_AppBase):
         # Empty: the whole list area becomes one large drop target.
         if not count:
             self.files_list_frame.pack_forget()
-            self.drop_zone.pack(fill="both", expand=True)
+            self.drop_zone.pack(fill="both", expand=True, padx=RING, pady=RING)
             return
         self.drop_zone.pack_forget()
-        self.files_list_frame.pack(fill="both", expand=True)
+        self.files_list_frame.pack(fill="both", expand=True, padx=RING, pady=RING)
 
         for idx, file in enumerate(self.webp_files):
             is_selected = file == self.selected_file
@@ -1699,8 +1890,10 @@ class WebPConverterApp(_AppBase):
         self._update_preview_info()
 
     def _on_space(self, event):
-        widget = self.focus_get()
-        if isinstance(widget, (tk.Entry, tk.Text)):
+        # event.widget is whatever had focus (focus_get() is None when another
+        # app holds OS focus). A focused control that uses Space stops the
+        # event before it gets here.
+        if isinstance(event.widget, (tk.Entry, tk.Text)):
             return
         self._toggle_preview()
         return "break"

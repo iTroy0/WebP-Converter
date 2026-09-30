@@ -37,6 +37,7 @@ Built in Python with a dark/light themed UI using [CustomTkinter](https://github
 - Per-file status indicators and rich metadata (size, dimensions, frames, duration) in the queue
 - Clean output names (`name.mp4`, `name (1).mp4`, …) — no random suffixes
 - Keyboard shortcuts: `Ctrl+O` add files, `Ctrl+Enter` convert, `Space` pause preview, `Delete` remove, `Escape` cancel
+- Fully keyboard-operable: `Tab` moves between controls with a visible focus ring; arrow keys change choices, sliders, the size menu and the selected file
 - Dark and light themes, toggled from the Output panel
 - Settings, theme, and window size persist between sessions
 - Standalone EXE/binary build via PyInstaller
