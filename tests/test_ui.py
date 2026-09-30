@@ -52,6 +52,31 @@ class UITest(AppFixture, unittest.TestCase):
         self.assertEqual(self.app.preview_frames, [])
         self.assertIn("Convert", self.app.convert_btn.cget("text"))
 
+    def test_empty_queue_swaps_list_for_drop_target(self):
+        app = self.app
+        app.update_idletasks()
+        self.assertTrue(app.files_list_frame._parent_frame.winfo_ismapped())
+        self.assertFalse(app.drop_zone.winfo_ismapped())
+        self.assertEqual(app.clear_all_btn.cget("state"), "normal")
+
+        app.clear_file_list()
+        app.update_idletasks()
+        self.assertTrue(app.drop_zone.winfo_ismapped())
+        self.assertFalse(app.files_list_frame._parent_frame.winfo_ismapped())
+        self.assertEqual(app.clear_all_btn.cget("state"), "disabled")
+
+    def test_queue_scrollbar_appears_only_on_overflow(self):
+        app = self.app
+        bar = app.files_list_frame._scrollbar
+        pump(app, 100)
+        self.assertFalse(bar.winfo_ismapped(), "one file should not need a scrollbar")
+
+        many = [make_webp(os.path.join(self.tmp.name, f"many{i:02d}.webp"),
+                          size=(16, 16), frames=2) for i in range(30)]
+        app._add_files(many)
+        self.assertTrue(wait_until(app, bar.winfo_ismapped),
+                        "30 rows overflow the list but no scrollbar appeared")
+
     def test_drop_handler_adds_files_and_folders(self):
         app = self.app
         folder = os.path.join(self.tmp.name, "dropped")
@@ -63,9 +88,11 @@ class UITest(AppFixture, unittest.TestCase):
         app.clear_file_list()
 
         app._set_drop_active(True)
-        self.assertEqual(app.drop_zone.cget("fg_color"), G.DROP_TINT)
+        # The whole column tints — including the queue's own canvas.
+        self.assertEqual(app.source_column.cget("fg_color"), G.DROP_TINT)
+        self.assertEqual(app.files_list_frame.cget("fg_color"), G.DROP_TINT)
         app._on_drop(SimpleNamespace(data=f"{{{loose}}} {{{folder}}}"))
-        self.assertEqual(app.drop_zone.cget("fg_color"), G.RAISED)
+        self.assertEqual(app.source_column.cget("fg_color"), G.SURFACE)
         self.assertEqual(sorted(map(os.path.basename, app.webp_files)),
                          ["inside.webp", "loose.webp"])
         self.assertIn(inside, app.webp_files)
@@ -81,11 +108,15 @@ class UITest(AppFixture, unittest.TestCase):
             # Old frames stay on screen until the rebuilt ones arrive.
             self.assertIs(app.preview_frames, before)
             self.assertTrue(wait_until(app, lambda: app.preview_frames is not before))
-            # Bottom-left is clear of the sample's disc and alpha band, so it
-            # shows bare checkerboard — which must be in the new theme's colours.
+            # Just inside the rounded bottom-left corner: clear of the sample's
+            # disc and alpha band, so bare checkerboard in the new theme.
             image = app.preview_frames[0][0].cget("light_image")
-            corner = image.getpixel((0, image.height - 1))[:3]
-            self.assertIn(corner, {_rgb(G.tone(G.CHECK_A)), _rgb(G.tone(G.CHECK_B))})
+            inset = 2 * G.R_CTRL
+            px = image.getpixel((inset, image.height - 1 - inset))
+            self.assertEqual(px[3], 255)
+            self.assertIn(px[:3], {_rgb(G.tone(G.CHECK_A)), _rgb(G.tone(G.CHECK_B))})
+            # ...and the very corner is cut away by the rounding.
+            self.assertEqual(image.getpixel((0, image.height - 1))[3], 0)
         self.assertEqual(app._theme, start)
 
     # ── Settings form ────────────────────────
@@ -168,8 +199,8 @@ class UITest(AppFixture, unittest.TestCase):
             self.assertEqual(self.state(app.crf_slider), "disabled")
             self.assertEqual(app.quality_hint.cget("text"), G.HINT_GIF)
             self.assertFalse(app._validated_settings()["lossless"])
-            # The muted selection must not keep the live accent colour.
-            self.assertEqual(app.quality_seg.cget("selected_color"), G.HOVER)
+            # Disabled: the thumb sinks into the track, so nothing looks chosen.
+            self.assertEqual(app.quality_seg.cget("selected_color"), G.SEG_TRACK)
             self.set_format(".mkv")
             self.assertEqual(self.state(app.quality_seg), "normal")
             self.assertEqual(app.quality_hint.cget("text"), G.HINT_LOSSLESS[".mkv"])
@@ -195,15 +226,15 @@ class UITest(AppFixture, unittest.TestCase):
         app = self.app
         app._timing_mode.set("Original")
         app._on_timing_mode("Original")
+        controls = (app.add_files_btn, app.add_folder_btn, app.clear_all_btn,
+                    app.crf_slider, app.format_seg, app.quality_seg, app.timing_seg)
         app._set_controls_enabled(False)
         try:
-            for widget in (app.add_folder_btn, app.crf_slider, app.format_seg,
-                           app.quality_seg, app.timing_seg):
+            for widget in controls:
                 self.assertEqual(self.state(widget), "disabled")
         finally:
             app._set_controls_enabled(True)     # never leave the shared app locked
-        for widget in (app.add_folder_btn, app.crf_slider, app.format_seg,
-                       app.quality_seg, app.timing_seg):
+        for widget in controls:
             self.assertEqual(self.state(widget), "normal")
         # Unlocking must not revive the rate slider while timing is Original.
         self.assertEqual(self.state(app.fps_slider), "disabled")

@@ -43,6 +43,26 @@ class EncoderArgsTest(unittest.TestCase):
             self.assertFalse(G.keeps_alpha(fmt, lossless), (fmt, lossless))
 
 
+class FitBoxTest(unittest.TestCase):
+
+    def test_never_exceeds_an_odd_box(self):
+        for box in ((639, 879), (101, 57), (333, 333)):
+            for src in ((64, 48), (48, 64), (100, 100), (1920, 1080)):
+                w, h = G.fit_box(*src, *box)
+                self.assertLessEqual(w, box[0], (src, box))
+                self.assertLessEqual(h, box[1], (src, box))
+                self.assertEqual((w % 2, h % 2), (0, 0), (src, box))
+
+    def test_even_boxes_give_the_same_sizes_as_make_even(self):
+        # Every encode target is even; those sizes must not have shifted.
+        for src in ((1000, 563), (563, 1000), (1919, 1080), (641, 359)):
+            for box in G.RESOLUTION_MAP.values():
+                ratio = min(box[0] / src[0], box[1] / src[1])
+                old = G.make_even(max(2, round(src[0] * ratio)),
+                                  max(2, round(src[1] * ratio)))
+                self.assertEqual(G.fit_box(*src, *box), old, (src, box))
+
+
 class LetterboxTest(unittest.TestCase):
 
     def setUp(self):

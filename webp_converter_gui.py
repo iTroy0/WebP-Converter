@@ -118,11 +118,18 @@ HINT_LOSSLESS = {
 # ctk.set_appearance_mode() call — no per-widget bookkeeping.
 # ─────────────────────────────────────────────
 
-BG         = ("#F4F4F6", "#0B0B0D")   # window / gutter
-SURFACE    = ("#FFFFFF", "#141417")   # panels, chrome bars
-RAISED     = ("#F1F1F4", "#1C1C21")   # controls, rows, wells
+BG         = ("#F4F4F6", "#0B0B0D")   # preview canvas
+SURFACE    = ("#FFFFFF", "#141417")   # side columns, action bar
+RAISED     = ("#F1F1F4", "#1C1C21")   # controls; row hover
 HOVER      = ("#E8E8EC", "#24242A")   # hover state of RAISED
-LINE       = ("#E3E3E8", "#27272E")   # hairline borders
+LINE       = ("#E3E3E8", "#27272E")   # hairline dividers
+SELECTED   = ("#E7ECFD", "#1C2240")   # selected queue row
+
+# Segmented controls mark the choice with a neutral thumb, not the accent:
+# accent is kept for the primary action, sliders, the selected file and focus.
+SEG_TRACK  = ("#E9E9EE", "#1C1C21")
+SEG_THUMB  = ("#FFFFFF", "#393943")
+SEG_HOVER  = ("#F3F3F6", "#29292F")
 
 TEXT       = ("#16161A", "#ECECF0")   # primary copy
 DIM        = ("#67676F", "#8D8D96")   # labels, metadata
@@ -143,8 +150,9 @@ CHECK_A    = ("#EDEDF0", "#1E1E23")   # preview transparency checkerboard
 CHECK_B    = ("#E2E2E7", "#17171B")
 
 # ── Geometry ───────────────────────────────────
-# Content panels round and inset; window chrome is square and full-bleed.
-# Inner gaps always exceed inner radii, so nested corners never collide.
+# Structure (columns, action bar) is square and full-bleed, divided by
+# hairlines. Everything inside it is rounded: large surfaces R_PANEL, controls
+# and rows R_CTRL. Nested radii are concentric: inner = outer - gap.
 
 R_PANEL  = 12
 R_CTRL   = 8
@@ -153,14 +161,14 @@ R_PILL   = 3
 
 H_CTRL   = 36
 H_MINI   = 30
-H_CTA    = 44
+H_CTA    = 40
 H_SLIDER = 18   # track is H_SLIDER - 2*SLIDER_INSET thick
-H_BAR    = 6
+H_BAR    = 2    # progress rail; doubles as the action bar's top divider
 SLIDER_INSET = 6
+SEG_INSET = 3   # track visible around the thumb
 
 S_XS, S_SM, S_MD, S_LG, S_XL = 4, 8, 12, 16, 24
 PAD_X, PAD_Y = 16, 14
-GAP      = 10
 BORDER_W = 1
 
 LABEL_COL = 74   # width of the form label column
@@ -173,7 +181,7 @@ HINT_WRAP = 264  # narrower than the output control column: hints never widen it
 COL_SOURCE, COL_PREVIEW, COL_OUTPUT = 300, 300, 360
 PREVIEW_MIN = (260, 200)       # requested size of the preview well
 WIN_DEFAULT = (1240, 760)
-WIN_MIN = (1040, 640)          # fits the tallest settings state (see tests)
+WIN_MIN = (1040, 520)          # fits the tallest settings state (see tests)
 
 # ── Typography ─────────────────────────────────
 # Populated by init_fonts() once a Tk root exists — tkfont.families() needs one.
@@ -200,13 +208,11 @@ def _pick_family(candidates, fallback="TkDefaultFont"):
 def init_fonts():
     sans = _pick_family(_SANS)
     mono = _pick_family(_MONO)
-    F.brand   = (sans, 16, "bold")
-    F.section = (sans, 10, "bold")
+    F.title   = (sans, 13, "bold")
     F.body    = (sans, 12)
     F.body_b  = (sans, 12, "bold")
     F.small   = (sans, 11)
     F.btn     = (sans, 12, "bold")
-    F.cta     = (sans, 14, "bold")
     F.glyph   = (sans, 20)
     F.mono    = (mono, 11)
     F.mono_b  = (mono, 11, "bold")
@@ -250,12 +256,26 @@ def make_even(w: int, h: int) -> tuple:
     return w if w % 2 == 0 else w + 1, h if h % 2 == 0 else h + 1
 
 
+def _even_within(x: int, limit: int) -> int:
+    """Nearest even value to x that doesn't exceed limit (rounds up if it can)."""
+    x = max(2, min(x, limit))
+    if x % 2:
+        x = x + 1 if x + 1 <= limit else x - 1
+    return max(2, x)
+
+
 def fit_box(w, h, box_w, box_h):
-    """Largest even size fitting inside box while keeping aspect ratio."""
+    """Largest even size fitting inside box while keeping aspect ratio.
+
+    Rounds an odd dimension up where the box allows, as make_even does, so
+    even boxes (every encode target) give the same sizes as always; only an
+    odd box — like a preview well — gets rounded down instead of overflowing.
+    """
     if w <= 0 or h <= 0:
-        return make_even(box_w, box_h)
+        return _even_within(box_w, box_w), _even_within(box_h, box_h)
     ratio = min(box_w / w, box_h / h)
-    return make_even(max(2, round(w * ratio)), max(2, round(h * ratio)))
+    return (_even_within(round(w * ratio), box_w),
+            _even_within(round(h * ratio), box_h))
 
 
 def letterbox(img: Image.Image, target: tuple, keep_alpha: bool = False) -> Image.Image:
@@ -300,6 +320,15 @@ def checkerboard(size: tuple, cell: int = 12) -> Image.Image:
     return img
 
 
+def rounded_mask(size: tuple, radius: int) -> Image.Image:
+    """Anti-aliased alpha mask with rounded corners (drawn 4x, downsampled)."""
+    k = 4
+    big = Image.new("L", (size[0] * k, size[1] * k), 0)
+    ImageDraw.Draw(big).rounded_rectangle(
+        [0, 0, big.width - 1, big.height - 1], radius=radius * k, fill=255)
+    return big.resize(size, Image.LANCZOS)
+
+
 def rgba_to_gif_frame(img: Image.Image) -> Image.Image:
     """Quantize RGBA to palette frame with binary transparency at index 255."""
     alpha = img.getchannel("A")
@@ -324,20 +353,25 @@ def short_path(path: str, limit: int = 52) -> str:
 # Widget factories — the single source of style
 # ─────────────────────────────────────────────
 
-def panel(parent, title: str = "", pad_x: int = PAD_X):
-    """A content panel. Returns (card, head, body); head is None without a title."""
-    card = ctk.CTkFrame(parent, fg_color=SURFACE, corner_radius=R_PANEL,
-                        border_width=BORDER_W, border_color=LINE)
+def column(parent, title: str = "", fill=SURFACE):
+    """A full-height layout column. Returns (frame, head, body).
+
+    Columns are structure, not content: square and borderless, separated by
+    hairline dividers. head is the title row (None without a title), where a
+    column's own actions sit on the right.
+    """
+    frame = ctk.CTkFrame(parent, fg_color=fill, corner_radius=0, border_width=0)
     head = None
     if title:
-        head = ctk.CTkFrame(card, fg_color="transparent")
+        head = ctk.CTkFrame(frame, fg_color="transparent", height=H_MINI)
         head.pack(fill="x", padx=PAD_X, pady=(PAD_Y, 0))
-        ctk.CTkLabel(head, text=title.upper(), font=F.section,
-                     text_color=DIM).pack(side="left")
-    body = ctk.CTkFrame(card, fg_color="transparent")
-    body.pack(fill="both", expand=True, padx=pad_x,
+        head.pack_propagate(False)       # same height with or without actions
+        ctk.CTkLabel(head, text=title, font=F.title, text_color=TEXT,
+                     height=1).pack(side="left")
+    body = ctk.CTkFrame(frame, fg_color="transparent")
+    body.pack(fill="both", expand=True, padx=PAD_X,
               pady=(S_MD if title else PAD_Y, PAD_Y))
-    return card, head, body
+    return frame, head, body
 
 
 def primary_button(parent, text, command, height=H_CTRL, **kw):
@@ -349,14 +383,16 @@ def primary_button(parent, text, command, height=H_CTRL, **kw):
 
 
 def secondary_button(parent, text, command, height=H_CTRL, **kw):
+    # Filled, not outlined: the fill alone separates it from the column.
     return ctk.CTkButton(parent, text=text, command=command,
                          fg_color=RAISED, hover_color=HOVER,
                          text_color=TEXT, font=F.btn,
                          corner_radius=R_CTRL, height=height,
-                         border_width=BORDER_W, border_color=LINE, **kw)
+                         border_width=0, **kw)
 
 
 def ghost_button(parent, text, command, size=26, **kw):
+    # HOVER, not RAISED: it must still show on a hovered (RAISED) queue row.
     return ctk.CTkButton(parent, text=text, command=command,
                          fg_color="transparent", hover_color=HOVER,
                          text_color=FAINT, font=F.body,
@@ -364,13 +400,33 @@ def ghost_button(parent, text, command, size=26, **kw):
                          width=size, height=size, **kw)
 
 
+def text_button(parent, text, command, **kw):
+    """A quiet action for a column's title row, e.g. "Clear"."""
+    return ctk.CTkButton(parent, text=text, command=command,
+                         fg_color="transparent", hover_color=RAISED,
+                         text_color=DIM, text_color_disabled=FAINT, font=F.body,
+                         corner_radius=R_CTRL, height=H_MINI, width=1, **kw)
+
+
 def segmented(parent, values, variable, command=None):
-    return ctk.CTkSegmentedButton(
+    seg = ctk.CTkSegmentedButton(
         parent, values=values, variable=variable, command=command,
-        fg_color=RAISED, selected_color=ACCENT, selected_hover_color=ACCENT_HI,
-        unselected_color=RAISED, unselected_hover_color=HOVER,
-        text_color=TEXT, text_color_disabled=FAINT, font=F.body,
-        corner_radius=R_CTRL, height=H_CTRL, border_width=2)
+        fg_color=SEG_TRACK, selected_color=SEG_THUMB,
+        selected_hover_color=SEG_THUMB,
+        unselected_color=SEG_TRACK, unselected_hover_color=SEG_HOVER,
+        text_color=DIM, text_color_disabled=FAINT, font=F.body,
+        corner_radius=R_CTRL, height=H_CTRL, border_width=SEG_INSET)
+
+    # The chosen segment's label is TEXT, the rest DIM: a second cue beside
+    # the neutral thumb. CTk has no per-segment text colour, hence the
+    # private _buttons_dict.
+    def emphasise(*_):
+        for value, button in seg._buttons_dict.items():
+            button.configure(text_color=TEXT if value == variable.get() else DIM)
+
+    variable.trace_add("write", emphasise)
+    emphasise()
+    return seg
 
 
 def form_label(parent, text, row):
@@ -525,107 +581,125 @@ class WebPConverterApp(_AppBase):
     # ── Layout skeleton ──────────────────────
 
     def _build_layout(self):
-        self._build_header()
-        self._build_footer()
-
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(side="top", fill="both", expand=True, padx=S_MD, pady=S_MD)
+        # The body's LINE fill shows through 1px gaps between the columns,
+        # which is what draws the hairline dividers.
+        body = ctk.CTkFrame(self, fg_color=LINE, corner_radius=0)
         body.rowconfigure(0, weight=1)
 
-        # (card, minimum card width, share of spare width)
+        # (column, minimum width, share of spare width)
         columns = ((self._build_source(body),  COL_SOURCE,  2),
                    (self._build_preview(body), COL_PREVIEW, 3),
                    (self._build_output(body),  COL_OUTPUT,  0))
         last = len(columns) - 1
-        for col, (card, min_w, weight) in enumerate(columns):
-            pad = (0 if col == 0 else GAP // 2, 0 if col == last else GAP // 2)
+        for col, (frame, min_w, weight) in enumerate(columns):
+            pad = (0, 0 if col == last else BORDER_W)
             body.columnconfigure(col, weight=weight, minsize=min_w + sum(pad))
-            card.grid(row=0, column=col, sticky="nsew", padx=pad)
+            frame.grid(row=0, column=col, sticky="nsew", padx=pad)
 
-    # ── Chrome: header ───────────────────────
+        # Built after the body so keyboard focus reaches it last, but packed
+        # first so it keeps its height when the window is short.
+        self._build_action_bar()
+        self.action_bar.pack(side="bottom", fill="x")
+        body.pack(side="top", fill="both", expand=True)
 
-    def _build_header(self):
-        bar = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0, height=58)
-        bar.pack(side="top", fill="x")
-        bar.pack_propagate(False)
-        ctk.CTkFrame(self, height=BORDER_W, fg_color=LINE,
-                     corner_radius=0).pack(side="top", fill="x")
+        # Widgets whose state depends only on the conversion lock. Anything
+        # that also depends on other controls is owned by _sync_controls.
+        self._lockable = [
+            self.add_files_btn, self.add_folder_btn,
+            self.output_folder_btn, self.res_menu, self.combine_check,
+            self.custom_res_width, self.custom_res_height,
+        ]
 
-        ctk.CTkLabel(bar, text="◆", font=F.brand,
-                     text_color=ACCENT_TX).pack(side="left", padx=(S_LG, S_SM))
-        ctk.CTkLabel(bar, text="WebP → Video", font=F.brand,
-                     text_color=TEXT).pack(side="left")
-        ctk.CTkLabel(bar, text=f"v{APP_VERSION}", font=F.mono,
-                     text_color=FAINT).pack(side="left", padx=(S_MD, 0))
+    # ── Action bar ───────────────────────────
+    # One slim bar replaces the old header and footer: where files go on the
+    # left; status and the one accent-filled action on the right. The app's
+    # name lives in the window's title bar, which already shows it.
 
-        self.theme_btn = ghost_button(
-            bar, "☾" if self._theme == "dark" else "☀",
-            self._toggle_theme, size=H_MINI)
-        self.theme_btn.configure(text_color=DIM)
-        self.theme_btn.pack(side="right", padx=(S_SM, S_LG))
-
-        self.status_text = ctk.CTkLabel(bar, text="Ready", font=F.body,
-                                        text_color=DIM)
-        self.status_text.pack(side="right", padx=(0, S_MD))
-        self.status_dot = ctk.CTkLabel(bar, text="●", font=F.small,
-                                       text_color=DIM)
-        self.status_dot.pack(side="right", padx=(0, S_SM))
-        self._status_current = ("Ready", DIM)
-
-    # ── Chrome: footer ───────────────────────
-
-    def _build_footer(self):
+    def _build_action_bar(self):
         bar = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0)
-        bar.pack(side="bottom", fill="x")
-        ctk.CTkFrame(self, height=BORDER_W, fg_color=LINE,
-                     corner_radius=0).pack(side="bottom", fill="x")
+        self.action_bar = bar
 
-        row = ctk.CTkFrame(bar, fg_color="transparent")
-        row.pack(fill="x", padx=S_LG, pady=(S_MD, S_SM))
-
-        self.convert_btn = primary_button(
-            row, "▶   Convert", self.start_conversion, height=H_CTA, width=190)
-        self.convert_btn.pack(side="right")
-
-        self.output_folder_btn = secondary_button(
-            row, "Change", self.select_output_folder, height=H_MINI, width=76)
-        self.output_folder_btn.pack(side="right", padx=(S_MD, S_MD))
-
-        ctk.CTkLabel(row, text="Output", font=F.body,
-                     text_color=DIM).pack(side="left")
-        self.output_folder_label = ctk.CTkLabel(
-            row, text="", font=F.mono, text_color=ACCENT_TX,
-            anchor="w", cursor="hand2")
-        self.output_folder_label.pack(side="left", padx=(S_MD, 0))
-        self.output_folder_label.bind("<Button-1>",
-                                      lambda _e: self.open_output_folder())
-
+        # The progress rail is also the bar's top divider.
         self.progress_bar = ctk.CTkProgressBar(
-            bar, fg_color=RAISED, progress_color=ACCENT,
-            corner_radius=R_PILL, height=H_BAR)
-        self.progress_bar.pack(fill="x", padx=S_LG, pady=(0, S_SM))
+            bar, fg_color=LINE, progress_color=ACCENT,
+            corner_radius=0, border_width=0, height=H_BAR)
+        self.progress_bar.pack(side="top", fill="x")
         self._apply_progress(0)
 
-        self.progress_text = ctk.CTkLabel(
-            bar, text="Ctrl+Enter to start", font=F.mono,
-            text_color=FAINT, anchor="w")
-        self.progress_text.pack(fill="x", padx=S_LG, pady=(0, S_MD))
+        row = ctk.CTkFrame(bar, fg_color="transparent")
+        row.pack(fill="x", padx=PAD_X, pady=S_MD)
+
+        ctk.CTkLabel(row, text="Output", font=F.body, text_color=DIM,
+                     height=1).pack(side="left")
+        self.output_folder_label = ctk.CTkLabel(
+            row, text="", font=F.mono, text_color=ACCENT_TX,
+            anchor="w", cursor="hand2", height=1)
+        self.output_folder_label.pack(side="left", padx=(S_SM, S_MD))
+        self.output_folder_label.bind("<Button-1>",
+                                      lambda _e: self.open_output_folder())
+        self.output_folder_btn = secondary_button(
+            row, "Change", self.select_output_folder, height=H_MINI, width=1)
+        self.output_folder_btn.pack(side="left")
+
+        self.convert_btn = primary_button(
+            row, "▶   Convert", self.start_conversion, height=H_CTA, width=176)
+        self.convert_btn.pack(side="right")
+        self.status_text = ctk.CTkLabel(row, text="Ready", font=F.body,
+                                        text_color=DIM, height=1)
+        self.status_text.pack(side="right", padx=(0, S_LG))
+        self.status_dot = ctk.CTkLabel(row, text="●", font=F.small,
+                                       text_color=DIM, height=1)
+        self.status_dot.pack(side="right", padx=(0, S_SM))
+        self.progress_text = ctk.CTkLabel(row, text="", font=F.mono,
+                                          text_color=DIM, height=1)
+        self.progress_text.pack(side="right", padx=(0, S_LG))
+        self._status_current = ("Ready", DIM)
 
     # ── Column 1: source ─────────────────────
 
     def _build_source(self, parent):
-        card, head, body = panel(parent, "Source", pad_x=S_MD)
+        frame, head, body = column(parent, "Source")
+        self.source_column = frame
 
         self.queue_count_label = ctk.CTkLabel(head, text="", font=F.mono,
-                                              text_color=FAINT)
-        self.queue_count_label.pack(side="right")
+                                              text_color=FAINT, height=1)
+        self.queue_count_label.pack(side="left", padx=(S_SM, 0))
+        self.clear_all_btn = text_button(head, "Clear", self.clear_file_list)
+        self.clear_all_btn.pack(side="right")
 
-        # Drop zone — click adds files, drag-over tints it
+        # Equal halves via a uniform grid; width=1 so the buttons ask only for
+        # their text, not CTk's 140px default, and never widen the column.
+        add_row = ctk.CTkFrame(body, fg_color="transparent")
+        add_row.pack(fill="x")
+        add_row.columnconfigure((0, 1), weight=1, uniform="add")
+        self.add_files_btn = secondary_button(
+            add_row, "+  Add files", self.select_webps, height=H_MINI, width=1)
+        self.add_files_btn.grid(row=0, column=0, sticky="ew", padx=(0, S_SM // 2))
+        self.add_folder_btn = secondary_button(
+            add_row, "Add folder", self.select_folder_of_webps,
+            height=H_MINI, width=1)
+        self.add_folder_btn.grid(row=0, column=1, sticky="ew", padx=(S_SM // 2, 0))
+
+        # The list area shows the queue — or, while it's empty, a large drop
+        # target. update_files_list swaps them, so the target never takes
+        # space away from a real queue.
+        self.list_area = ctk.CTkFrame(body, fg_color="transparent")
+        self.list_area.pack(fill="both", expand=True, pady=(S_MD, 0))
+
+        # Queue — small requested height: it expands into whatever the column
+        # offers, and must not be what sets the window's minimum height.
+        self.files_list_frame = ctk.CTkScrollableFrame(
+            self.list_area, fg_color="transparent", corner_radius=0, height=120,
+            scrollbar_button_color=LINE,
+            scrollbar_button_hover_color=FAINT)
+        self.files_list_frame._parent_canvas.bind(
+            "<Configure>", self._sync_queue_scrollbar, add="+")
+
+        # Border drawn in the fill colour at rest so hover/drag can light it
+        # without changing any geometry.
         self.drop_zone = ctk.CTkFrame(
-            body, fg_color=RAISED, corner_radius=R_CTRL,
-            border_width=BORDER_W, border_color=LINE, height=96)
-        self.drop_zone.pack(fill="x", padx=S_XS)
-        self.drop_zone.pack_propagate(False)
+            self.list_area, fg_color=RAISED, corner_radius=R_PANEL,
+            border_width=BORDER_W, border_color=RAISED, height=160)
 
         inner = ctk.CTkFrame(self.drop_zone, fg_color="transparent")
         inner.place(relx=0.5, rely=0.5, anchor="center")
@@ -647,51 +721,48 @@ class WebPConverterApp(_AppBase):
             w.bind("<Button-1>", lambda _e: self.select_webps())
             w.bind("<Enter>", lambda _e: self._hover_drop(True))
             w.bind("<Leave>", lambda _e: self._hover_drop(False))
-
-        # Queue — small requested height: it expands into whatever the column
-        # offers, and must not be what sets the window's minimum height.
-        self.files_list_frame = ctk.CTkScrollableFrame(
-            body, fg_color="transparent", corner_radius=0, height=120,
-            scrollbar_button_color=LINE,
-            scrollbar_button_hover_color=FAINT)
-        self.files_list_frame.pack(fill="both", expand=True, pady=(S_MD, 0))
-
-        # Equal halves via a uniform grid; width=1 so the buttons ask only for
-        # their text, not CTk's 140px default, and never widen the column.
-        actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.pack(fill="x", padx=S_XS, pady=(S_MD, 0))
-        actions.columnconfigure((0, 1), weight=1, uniform="actions")
-
-        self.add_folder_btn = secondary_button(
-            actions, "Add folder", self.select_folder_of_webps,
-            height=H_MINI, width=1)
-        self.add_folder_btn.grid(row=0, column=0, sticky="ew", padx=(0, S_SM // 2))
-
-        self.clear_all_btn = secondary_button(
-            actions, "Clear all", self.clear_file_list, height=H_MINI, width=1)
-        self.clear_all_btn.grid(row=0, column=1, sticky="ew", padx=(S_SM // 2, 0))
-        return card
+        return frame
 
     def _hover_drop(self, on: bool):
         if self._converting:
             return
-        self.drop_zone.configure(border_color=ACCENT if on else LINE)
+        self.drop_zone.configure(border_color=ACCENT if on else RAISED)
 
     def _set_drop_active(self, on: bool):
-        self.drop_zone.configure(
-            fg_color=DROP_TINT if on else RAISED,
-            border_color=ACCENT if on else LINE)
+        """Drag-over feedback: the whole Source column is the drop target."""
+        self.source_column.configure(fg_color=DROP_TINT if on else SURFACE)
+        # The queue paints on a plain Tk canvas, which the column's colour
+        # change doesn't reach; its own configure repaints canvas and rows.
+        self.files_list_frame.configure(fg_color=DROP_TINT if on else "transparent")
+        self.drop_zone.configure(border_color=ACCENT if on else RAISED)
+
+    def _sync_queue_scrollbar(self, _event=None):
+        """Show the queue's scrollbar only while the list overflows.
+
+        CTkScrollableFrame always shows it, and in this chrome-light layout an
+        idle track is noise. Relies on CTk internals (_parent_canvas,
+        _scrollbar), so it degrades to CTk's default if those move.
+        """
+        lst = self.files_list_frame
+        try:
+            if lst.winfo_reqheight() > lst._parent_canvas.winfo_height():
+                lst._scrollbar.grid()
+            else:
+                lst._scrollbar.grid_remove()
+        except (AttributeError, tk.TclError):
+            pass
 
     # ── Column 2: preview ────────────────────
 
     def _build_preview(self, parent):
-        card, _, body = panel(parent, "Preview")
+        # An open canvas: no title, no card — frames sit straight on it.
+        frame, _, body = column(parent, fill=BG)
 
         # The well takes whatever space the column gives it. The label is
         # placed, not packed, so the image never feeds back into the well's
         # requested size; frames are re-fitted when the well is resized.
         self.preview_well = ctk.CTkFrame(
-            body, fg_color=RAISED, corner_radius=R_CTRL,
+            body, fg_color="transparent", corner_radius=0,
             width=PREVIEW_MIN[0], height=PREVIEW_MIN[1])
         self.preview_well.pack(fill="both", expand=True)
         self.preview_well.bind("<Configure>", self._on_preview_resize)
@@ -707,14 +778,20 @@ class WebPConverterApp(_AppBase):
         # or the well moves under frames that were just fitted to it.
         self.preview_info = ctk.CTkLabel(body, text="", font=F.mono,
                                          text_color=FAINT, justify="center",
-                                         wraplength=PREVIEW_MIN[0])
+                                         wraplength=PREVIEW_MIN[0], height=1)
         self.preview_info.pack(fill="x", pady=(S_MD, 0))
-        return card
+        return frame
 
     # ── Column 3: output ─────────────────────
 
     def _build_output(self, parent):
-        out_card, _, form = panel(parent, "Output")
+        out_frame, head, form = column(parent, "Output")
+        self.theme_btn = ghost_button(
+            head, "☾" if self._theme == "dark" else "☀",
+            self._toggle_theme, size=H_MINI)
+        self.theme_btn.configure(text_color=DIM)
+        self.theme_btn.pack(side="right")
+
         form.columnconfigure(0, weight=0, minsize=LABEL_COL)
         form.columnconfigure(1, weight=1)
 
@@ -800,14 +877,7 @@ class WebPConverterApp(_AppBase):
             checkbox_width=18, checkbox_height=18)
         self.combine_check.grid(row=8, column=0, columnspan=2, sticky="w")
 
-        # Widgets whose state depends only on the lock. Segmented controls and
-        # sliders also depend on each other, so _sync_controls owns them.
-        self._lockable = [
-            self.add_folder_btn, self.clear_all_btn, self.output_folder_btn,
-            self.res_menu, self.combine_check,
-            self.custom_res_width, self.custom_res_height,
-        ]
-        return out_card
+        return out_frame
 
     def _slider_row(self, parent, row, var, from_, to, steps, suffix, attr,
                     pady=(0, S_SM)):
@@ -856,9 +926,10 @@ class WebPConverterApp(_AppBase):
 
     @staticmethod
     def _style_segmented(seg, enabled: bool):
+        # Disabled: the thumb sinks into the track, so nothing looks chosen.
+        thumb = SEG_THUMB if enabled else SEG_TRACK
         seg.configure(state="normal" if enabled else "disabled",
-                      selected_color=ACCENT if enabled else HOVER,
-                      selected_hover_color=ACCENT_HI if enabled else HOVER)
+                      selected_color=thumb, selected_hover_color=thumb)
 
     def _quality_hint(self) -> str:
         fmt = self.output_format.get()
@@ -870,12 +941,14 @@ class WebPConverterApp(_AppBase):
         """Apply every dependency between controls — the only place that does.
 
         The conversion lock disables everything; otherwise a GIF target
-        disables Quality, Lossless disables the CRF slider, and Original
-        timing disables the Rate slider.
+        disables Quality, Lossless disables the CRF slider, Original timing
+        disables the Rate slider, and an empty queue disables Clear.
         """
         locked = self._locked
         gif = self.output_format.get() == ".gif"
         lossless = self.lossless.get() and not gif
+        self.clear_all_btn.configure(
+            state="disabled" if locked or not self.webp_files else "normal")
         self._style_segmented(self.format_seg, not locked)
         self._style_segmented(self.timing_seg, not locked)
         self._style_segmented(self.quality_seg, not (locked or gif))
@@ -971,9 +1044,8 @@ class WebPConverterApp(_AppBase):
                 widget.configure(state=state)
             except (tk.TclError, ValueError):
                 pass
-        self.drop_zone.configure(
-            border_color=LINE,
-            fg_color=RAISED if enabled else SURFACE)
+        fill = RAISED if enabled else SURFACE
+        self.drop_zone.configure(fg_color=fill, border_color=fill)
         self._sync_controls()
 
     def _ui(self, fn, *args, **kwargs):
@@ -993,10 +1065,10 @@ class WebPConverterApp(_AppBase):
             pass
 
     def _apply_progress(self, fraction: float):
-        """At zero the rounded cap would still paint a stray dot — hide the fill."""
+        """At zero, hide the fill so the rail reads as a plain divider."""
         self.progress_bar.set(fraction)
         self.progress_bar.configure(
-            progress_color=RAISED if fraction <= 0 else ACCENT)
+            progress_color=LINE if fraction <= 0 else ACCENT)
 
     def _ui_progress(self, fraction: float, stage: str = ""):
         fraction = max(0.0, min(1.0, fraction))
@@ -1164,32 +1236,34 @@ class WebPConverterApp(_AppBase):
         count = len(self.webp_files)
         self.queue_count_label.configure(text=str(count) if count else "")
         self._refresh_convert_btn()
+        self._sync_controls()
 
-        if not self.webp_files:
-            ctk.CTkLabel(
-                self.files_list_frame,
-                text="Queue is empty",
-                font=F.small, text_color=FAINT,
-            ).pack(pady=S_XL)
+        # Empty: the whole list area becomes one large drop target.
+        if not count:
+            self.files_list_frame.pack_forget()
+            self.drop_zone.pack(fill="both", expand=True)
             return
+        self.drop_zone.pack_forget()
+        self.files_list_frame.pack(fill="both", expand=True)
 
         for idx, file in enumerate(self.webp_files):
             is_selected = file == self.selected_file
 
+            # Rows have no outline: a fill appears on hover and on selection.
             item = ctk.CTkFrame(
-                self.files_list_frame, fg_color=RAISED, corner_radius=R_CTRL,
-                border_width=BORDER_W,
-                border_color=ACCENT if is_selected else LINE)
-            item.pack(fill="x", pady=(0, S_SM))
+                self.files_list_frame,
+                fg_color=SELECTED if is_selected else "transparent",
+                corner_radius=R_CTRL)
+            item.pack(fill="x", pady=(0, S_XS))
             self.file_rows[file] = item
 
             def on_enter(_e, row=item, path=file):
                 if path != self.selected_file and not self._converting:
-                    row.configure(fg_color=HOVER)
+                    row.configure(fg_color=RAISED)
 
             def on_leave(_e, row=item, path=file):
                 if path != self.selected_file:
-                    row.configure(fg_color=RAISED)
+                    row.configure(fg_color="transparent")
 
             def on_click(_e, path=file):
                 self.set_selected_file(path)
@@ -1227,6 +1301,8 @@ class WebPConverterApp(_AppBase):
             remove_btn.bind("<Enter>", on_enter)
             remove_btn.bind("<Leave>", on_leave)
 
+        self.after_idle(self._sync_queue_scrollbar)
+
     def _apply_status_style(self, label: ctk.CTkLabel, status: str):
         styles = {
             "converting": ("●", WARN),
@@ -1247,7 +1323,7 @@ class WebPConverterApp(_AppBase):
         if previous and previous in self.file_rows:
             row = self.file_rows[previous]
             if row.winfo_exists():
-                row.configure(fg_color=RAISED, border_color=LINE)
+                row.configure(fg_color="transparent")
             name = self.file_name_labels.get(previous)
             if name and name.winfo_exists():
                 name.configure(text_color=TEXT)
@@ -1255,7 +1331,7 @@ class WebPConverterApp(_AppBase):
         if path in self.file_rows:
             row = self.file_rows[path]
             if row.winfo_exists():
-                row.configure(fg_color=RAISED, border_color=ACCENT)
+                row.configure(fg_color=SELECTED)
             name = self.file_name_labels.get(path)
             if name and name.winfo_exists():
                 name.configure(text_color=ACCENT_TX)
@@ -1330,18 +1406,13 @@ class WebPConverterApp(_AppBase):
     # ── Preview ──────────────────────────────
 
     def _preview_box(self) -> tuple:
-        """Fit box for preview frames, in CTk (scaled) units.
-
-        Inset by the well's corner radius so a frame's square corners never
-        cover the well's rounded ones.
-        """
+        """Fit box for preview frames, in CTk (scaled) units."""
         well = self.preview_well
         scale = ctk.ScalingTracker.get_widget_scaling(well)
         w, h = well.winfo_width() / scale, well.winfo_height() / scale
         if w <= 1 or h <= 1:      # not laid out yet
             w, h = PREVIEW_MIN
-        inset = 2 * R_CTRL
-        return max(2, int(w) - inset), max(2, int(h) - inset)
+        return max(2, int(w)), max(2, int(h))
 
     def _on_preview_resize(self, _event=None):
         # Debounced: a window drag fires dozens of Configure events.
@@ -1384,6 +1455,7 @@ class WebPConverterApp(_AppBase):
             with Image.open(filepath) as im:
                 w, h = fit_box(im.width, im.height, *box)
                 checker = checkerboard((w, h))
+                corners = rounded_mask((w, h), R_CTRL)
                 fallback_ms = int(1000 / max(1, self.fps_value.get()))
                 for i, frame_img in enumerate(ImageSequence.Iterator(im)):
                     if gen != self._preview_gen or self._closing:
@@ -1395,6 +1467,7 @@ class WebPConverterApp(_AppBase):
                     delay = int(frame_img.info.get("duration", 0) or 0) or fallback_ms
                     composed = checker.copy()
                     composed.paste(rgba, (0, 0), rgba)
+                    composed.putalpha(corners)
                     frames.append(
                         (ctk.CTkImage(light_image=composed, size=(w, h)),
                          max(20, delay)))
@@ -1685,8 +1758,7 @@ class WebPConverterApp(_AppBase):
                                  f"{len(failures)} failed", "warn", 6000)
                 else:
                     self._ui(self._apply_progress, 1.0)
-                    self._ui(self.progress_text.configure,
-                             text="Done — files saved to the output folder")
+                    self._ui(self.progress_text.configure, text="All files saved")
                     self._ui(self._commit_status, "Done", OK)
                     self._ui(self.show_toast, "Conversion complete — click to open folder",
                              "ok", 5000, self.open_output_folder)
@@ -1694,7 +1766,8 @@ class WebPConverterApp(_AppBase):
             except Exception as e:
                 msg = str(e)
                 self._ui(self.show_toast, f"Error: {msg[:200]}", "err", 6000)
-                self._ui(self.progress_text.configure, text=f"Error: {msg[:120]}")
+                # The full message is in the toast; the bar only has room for this.
+                self._ui(self.progress_text.configure, text="Conversion failed")
                 self._ui(self._commit_status, "Error", DANGER)
                 for f in files:
                     if self.file_status.get(f) == "converting":
@@ -1867,7 +1940,10 @@ class WebPConverterApp(_AppBase):
         }
         glyph, color = glyphs.get(kind, glyphs["info"])
 
-        toast = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=R_PANEL,
+        # Toasts float over the action bar and output column (both SURFACE),
+        # so the rounded corners are drawn against SURFACE, not the window.
+        toast = ctk.CTkFrame(self, fg_color=RAISED, bg_color=SURFACE,
+                             corner_radius=R_PANEL,
                              border_width=BORDER_W, border_color=LINE)
         icon = ctk.CTkLabel(toast, text=glyph, font=F.body_b, text_color=color)
         icon.pack(side="left", padx=(S_LG, S_MD), pady=S_MD)
