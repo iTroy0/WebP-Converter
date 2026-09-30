@@ -399,9 +399,10 @@ def secondary_button(parent, text, command, height=H_CTRL, **kw):
 
 def ghost_button(parent, text, command, size=26, **kw):
     # HOVER, not RAISED: it must still show on a hovered (RAISED) queue row.
+    # Disabled glyphs drop to LINE, well below FAINT, so they read as off.
     return ctk.CTkButton(parent, text=text, command=command,
                          fg_color="transparent", hover_color=HOVER,
-                         text_color=FAINT, font=F.body,
+                         text_color=FAINT, text_color_disabled=LINE, font=F.body,
                          corner_radius=R_CTRL,
                          width=size, height=size, **kw)
 
@@ -433,6 +434,88 @@ def segmented(parent, values, variable, command=None):
     variable.trace_add("write", emphasise)
     emphasise()
     return seg
+
+
+class Tooltip:
+    """Hover hint: appears after a short pause, gone on leave or click.
+
+    Drawn inside the window like toasts, so its rounded corners match the rest
+    of the UI (bg is the colour its corners sit on). text may be a callable
+    returning the current text, or a falsy value to show nothing.
+    """
+    DELAY_MS = 450
+    GAP = 6
+
+    def __init__(self, app, widgets, text, bg=SURFACE, at_pointer=False):
+        self.app, self.text, self.bg, self.at_pointer = app, text, bg, at_pointer
+        self.anchor = widgets[0]
+        self._after_id = None
+        self._tip = None
+        for w in widgets:
+            w.bind("<Enter>", self._schedule, add="+")
+            w.bind("<Leave>", self._on_leave, add="+")
+            w.bind("<ButtonPress-1>", self.hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.app.after(self.DELAY_MS, self.show)
+
+    def _cancel(self):
+        if self._after_id:
+            self.app.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _on_leave(self, _event=None):
+        # Crossing between a widget's own parts (its canvas and its text)
+        # fires Leave too; only hide once the pointer has really left.
+        a = self.anchor
+        px, py = a.winfo_pointerxy()
+        x, y = a.winfo_rootx(), a.winfo_rooty()
+        if x <= px < x + a.winfo_width() and y <= py < y + a.winfo_height():
+            return
+        self.hide()
+
+    def show(self):
+        self._after_id = None
+        text = self.text() if callable(self.text) else self.text
+        if not text or self._tip is not None or not self.anchor.winfo_ismapped():
+            return
+        app, a = self.app, self.anchor
+        tip = ctk.CTkFrame(app, fg_color=RAISED, bg_color=self.bg,
+                           corner_radius=R_CTRL, border_width=BORDER_W,
+                           border_color=LINE)
+        ctk.CTkLabel(tip, text=text, font=F.small, text_color=TEXT,
+                     height=1).pack(padx=S_MD, pady=S_SM - 2)
+        tip.update_idletasks()
+
+        # Positions are measured in physical pixels; CTk's place() scales.
+        scale = ctk.ScalingTracker.get_widget_scaling(tip)
+        gap = round(self.GAP * scale)
+        tw, th = tip.winfo_reqwidth(), tip.winfo_reqheight()
+        if self.at_pointer:
+            px, py = a.winfo_pointerxy()
+            x = px - app.winfo_rootx() + 2 * gap
+            y = py - app.winfo_rooty() + 3 * gap
+        else:
+            ax, ay = a.winfo_rootx() - app.winfo_rootx(), a.winfo_rooty() - app.winfo_rooty()
+            x = ax + (a.winfo_width() - tw) // 2
+            y = ay + a.winfo_height() + gap
+            if y + th > app.winfo_height() - gap:     # no room below: go above
+                y = ay - th - gap
+        x = max(gap, min(x, app.winfo_width() - tw - gap))
+        y = max(gap, min(y, app.winfo_height() - th - gap))
+        tip.place(x=x / scale, y=y / scale)
+        tip.lift()
+        self._tip = tip
+
+    def hide(self, _event=None):
+        self._cancel()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except tk.TclError:
+                pass
+            self._tip = None
 
 
 def form_label(parent, text, row):
@@ -521,6 +604,8 @@ class WebPConverterApp(_AppBase):
         self._quality_mode     = ctk.StringVar(value="Compressed")
         self._locked           = False      # controls locked during conversion
         self._size_error_shown = False
+        self._tips: dict[str, Tooltip] = {}
+        self.file_remove_btns: dict[str, ctk.CTkButton] = {}
 
         # Preview state
         self.preview_frames:   list = []   # list of (CTkImage, delay_ms)
@@ -662,6 +747,13 @@ class WebPConverterApp(_AppBase):
         self.progress_text.pack(side="right", padx=(0, S_LG))
         self._status_current = ("Ready", DIM)
 
+        self._tips["output_path"] = Tooltip(self, [self.output_folder_label],
+                                            "Open output folder")
+        self._tips["convert"] = Tooltip(
+            self, [self.convert_btn],
+            lambda: "Cancel  ·  Esc" if self._converting
+            else "Convert  ·  Ctrl+Enter")
+
     # ── Column 1: source ─────────────────────
 
     def _build_source(self, parent):
@@ -686,6 +778,8 @@ class WebPConverterApp(_AppBase):
             add_row, "Add folder", self.select_folder_of_webps,
             height=H_MINI, width=1)
         self.add_folder_btn.grid(row=0, column=1, sticky="ew", padx=(S_SM // 2, 0))
+        self._tips["add_files"] = Tooltip(self, [self.add_files_btn],
+                                          "Add .webp files  ·  Ctrl+O")
 
         # The list area shows the queue — or, while it's empty, a large drop
         # target. update_files_list swaps them, so the target never takes
@@ -780,6 +874,12 @@ class WebPConverterApp(_AppBase):
             font=F.small, text_color=DIM, fg_color="transparent")
         self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
         self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
+        self._tips["preview"] = Tooltip(
+            self, [self.preview_well, self.preview_label],
+            lambda: self.preview_frames and (
+                "Click or Space to pause" if self.preview_running
+                else "Click or Space to play"),
+            bg=BG, at_pointer=True)
 
         # Fixed wrap width: a status line must never push the column wider,
         # or the well moves under frames that were just fitted to it.
@@ -798,6 +898,9 @@ class WebPConverterApp(_AppBase):
             self._toggle_theme, size=H_MINI)
         self.theme_btn.configure(text_color=DIM)
         self.theme_btn.pack(side="right")
+        self._tips["theme"] = Tooltip(
+            self, [self.theme_btn],
+            lambda: f"Switch to {'light' if self._theme == 'dark' else 'dark'} theme")
 
         form.columnconfigure(0, weight=0, minsize=LABEL_COL)
         form.columnconfigure(1, weight=1)
@@ -1010,6 +1113,8 @@ class WebPConverterApp(_AppBase):
         lossless = self.lossless.get() and not gif
         self.clear_all_btn.configure(
             state="disabled" if locked or not self.webp_files else "normal")
+        for remove_btn in self.file_remove_btns.values():
+            remove_btn.configure(state="disabled" if locked else "normal")
         self._style_segmented(self.format_seg, not locked)
         self._style_segmented(self.timing_seg, not locked)
         self._style_segmented(self.quality_seg, not (locked or gif))
@@ -1294,6 +1399,7 @@ class WebPConverterApp(_AppBase):
         self.file_status_labels = {}
         self.file_meta_labels = {}
         self.file_name_labels = {}
+        self.file_remove_btns = {}
 
         count = len(self.webp_files)
         self.queue_count_label.configure(text=str(count) if count else "")
@@ -1347,7 +1453,10 @@ class WebPConverterApp(_AppBase):
             self.file_meta_labels[file] = meta_lbl
 
             remove_btn = ghost_button(item, "✕", lambda i=idx: self.remove_file(i))
+            remove_btn.configure(state="disabled" if self._locked else "normal")
             remove_btn.pack(side="right", padx=(0, S_SM))
+            self.file_remove_btns[file] = remove_btn
+            Tooltip(self, [remove_btn], "Remove from queue  ·  Delete")
 
             status_lbl = ctk.CTkLabel(item, text="", width=20,
                                       font=F.body_b, text_color=FAINT)
@@ -1433,9 +1542,15 @@ class WebPConverterApp(_AppBase):
         self._stop_preview()
         self._detach_preview_image()
         self.preview_frames = []
-        self.preview_label.configure(image=None, text="Select a file to preview",
-                                     cursor="arrow")
+        self.preview_label.configure(image=None, text="Select a file to preview")
         self.preview_info.configure(text="")
+        self._set_preview_clickable(False)
+
+    def _set_preview_clickable(self, on: bool):
+        """Pointer over the whole canvas only while there's a clip to toggle."""
+        cursor = "hand2" if on else "arrow"
+        self.preview_well.configure(cursor=cursor)
+        self.preview_label.configure(cursor=cursor)
 
     def _detach_preview_image(self):
         """Drop the photo image from the underlying tk label while it still exists.
@@ -1545,6 +1660,7 @@ class WebPConverterApp(_AppBase):
         self.preview_frames = []
         self.preview_label.configure(image=None, text=f"Preview error: {message}")
         self.preview_info.configure(text="")
+        self._set_preview_clickable(False)
 
     def _start_preview(self, frames: list, gen: int, resume: bool = False):
         if gen != self._preview_gen or not frames:
@@ -1557,6 +1673,7 @@ class WebPConverterApp(_AppBase):
         self._stop_preview()
         self.preview_frames = frames
         self._show_frame(index)
+        self._set_preview_clickable(True)
         self.preview_running = running
         self._update_preview_info()
         if running:
@@ -1592,7 +1709,7 @@ class WebPConverterApp(_AppBase):
         """preview_index is always the frame on screen."""
         self.preview_index = index
         img = self.preview_frames[index][0]
-        self.preview_label.configure(image=img, text="", cursor="hand2")
+        self.preview_label.configure(image=img, text="")
         self.preview_label.image = img
 
     def _animate_preview(self):

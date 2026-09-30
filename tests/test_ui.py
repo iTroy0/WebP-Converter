@@ -351,6 +351,66 @@ class UITest(AppFixture, unittest.TestCase):
             app.resolution_preset.set("Same Resolution")
             app.toggle_custom_res_entry("Same Resolution")
 
+    # ── Tooltips and disabled states ─────────
+
+    def _shown_text(self, tip):
+        """Show a tooltip as hovering would, and return its text."""
+        tip.show()
+        self.assertIsNotNone(tip._tip, "tooltip did not appear")
+        label = tip._tip.winfo_children()[0]
+        text = label.cget("text")
+        tip.hide()
+        self.assertIsNone(tip._tip)
+        return text
+
+    def test_theme_tooltip_names_the_theme_it_switches_to(self):
+        app = self.app
+        other = "light" if app._theme == "dark" else "dark"
+        self.assertEqual(self._shown_text(app._tips["theme"]), f"Switch to {other} theme")
+
+    def test_preview_tooltip_follows_play_state(self):
+        app = self.app
+        self.assertIn("pause", self._shown_text(app._tips["preview"]))
+        app._toggle_preview()
+        try:
+            self.assertIn("play", self._shown_text(app._tips["preview"]))
+        finally:
+            app._toggle_preview()
+
+    def test_tooltip_waits_before_appearing_and_stays_in_the_window(self):
+        app = self.app
+        tip = app._tips["convert"]
+        tip._schedule()
+        self.assertIsNone(tip._tip, "appeared without the hover delay")
+        self.assertTrue(wait_until(app, lambda: tip._tip is not None, timeout=2))
+        try:
+            app.update_idletasks()
+            t = tip._tip
+            self.assertGreaterEqual(t.winfo_x(), 0)
+            self.assertGreaterEqual(t.winfo_y(), 0)
+            self.assertLessEqual(t.winfo_x() + t.winfo_width(), app.winfo_width())
+            self.assertLessEqual(t.winfo_y() + t.winfo_height(), app.winfo_height())
+            self.assertIn("Ctrl+Enter", t.winfo_children()[0].cget("text"))
+        finally:
+            tip.hide()
+
+    def test_nothing_to_preview_means_no_tooltip_and_no_pointer(self):
+        app = self.app
+        app.clear_file_list()
+        app._tips["preview"].show()
+        self.assertIsNone(app._tips["preview"]._tip)
+        self.assertEqual(str(app.preview_well.cget("cursor")), "arrow")
+
+    def test_row_remove_buttons_follow_the_lock(self):
+        app = self.app
+        button = app.file_remove_btns[self.sample]
+        app._set_controls_enabled(False)
+        try:
+            self.assertEqual(button.cget("state"), "disabled")
+        finally:
+            app._set_controls_enabled(True)
+        self.assertEqual(button.cget("state"), "normal")
+
     def test_toasts_are_capped(self):
         app = self.app
         for kind in ("info", "ok", "warn", "err", "info"):
