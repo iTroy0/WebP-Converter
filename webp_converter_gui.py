@@ -52,7 +52,6 @@ SETTINGS_FILE = os.path.join(_settings_dir(), "settings.json")
 
 MAX_DIMENSION = 7680
 MAX_PREVIEW_FRAMES = 200
-PREVIEW_W, PREVIEW_H = 420, 190
 
 VALID_FORMATS = (".mp4", ".mkv", ".webm", ".gif")
 VALID_RESOLUTIONS = ("Same Resolution", "480p", "720p", "1080p", "4K", "Custom")
@@ -119,6 +118,15 @@ GAP      = 10
 BORDER_W = 1
 
 LABEL_COL = 74   # width of the form label column
+
+# ── Layout ─────────────────────────────────────
+# Three columns side by side, so the window is as tall as the tallest column
+# rather than the sum of stacked panels. Source and preview share spare width;
+# output keeps its natural width so its controls never stretch on wide windows.
+COL_SOURCE, COL_PREVIEW, COL_OUTPUT = 300, 300, 360
+PREVIEW_MIN = (260, 200)       # requested size of the preview well
+WIN_DEFAULT = (1240, 760)
+WIN_MIN = (1040, 640)          # fits the tallest settings state (see tests)
 
 # ── Typography ─────────────────────────────────
 # Populated by init_fonts() once a Tk root exists — tkfont.families() needs one.
@@ -336,14 +344,19 @@ class WebPConverterApp(_AppBase):
         self.configure(fg_color=BG)
 
         self.title(f"WebP → Video  ·  v{APP_VERSION}")
-        # The layout has a hard minimum height; never open taller than the display.
-        avail_h = max(600, self.winfo_screenheight() - 80)
+        # Never open larger than the display — including a size saved on a bigger
+        # monitor. CTk geometry is in scaled units; screen size is physical pixels.
+        scale = ctk.ScalingTracker.get_window_scaling(self)
+        avail_w = int((self.winfo_screenwidth() - 40) / scale)
+        avail_h = int((self.winfo_screenheight() - 80) / scale)
+        w, h, pos = *WIN_DEFAULT, ""
         geo = self._settings.get("geometry", "")
-        if isinstance(geo, str) and re.fullmatch(r"\d{3,5}x\d{3,5}([+-]\d+){2}", geo):
-            self.geometry(geo)
-        else:
-            self.geometry(f"1160x{min(890, avail_h)}")
-        self.minsize(1040, min(865, avail_h))
+        m = re.fullmatch(r"(\d{3,5})x(\d{3,5})([+-]\d+[+-]\d+)", geo) \
+            if isinstance(geo, str) else None
+        if m:
+            w, h, pos = int(m[1]), int(m[2]), m[3]
+        self.geometry(f"{min(w, avail_w)}x{min(h, avail_h)}{pos}")
+        self.minsize(min(WIN_MIN[0], avail_w), min(WIN_MIN[1], avail_h))
         self.resizable(True, True)
 
         self._set_app_icon()
@@ -382,6 +395,8 @@ class WebPConverterApp(_AppBase):
         self.preview_running   = False
         self._preview_after_id = None
         self._preview_gen      = 0
+        self._preview_fit      = None      # box the current frames were fitted to
+        self._resize_after_id  = None
 
         # Toasts
         self._toasts: list[ctk.CTkFrame] = []
@@ -445,23 +460,17 @@ class WebPConverterApp(_AppBase):
 
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(side="top", fill="both", expand=True, padx=S_MD, pady=S_MD)
-        body.columnconfigure(0, weight=4, minsize=320)
-        body.columnconfigure(1, weight=6, minsize=430)
         body.rowconfigure(0, weight=1)
 
-        left = ctk.CTkFrame(body, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, GAP // 2))
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
-
-        right = ctk.CTkFrame(body, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="nsew", padx=(GAP // 2, 0))
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(0, weight=1, minsize=PREVIEW_H + 80)  # preview grows
-        right.rowconfigure(1, weight=0)   # settings are intrinsic height
-
-        self._build_source(left)
-        self._build_output(right)
+        # (card, minimum card width, share of spare width)
+        columns = ((self._build_source(body),  COL_SOURCE,  2),
+                   (self._build_preview(body), COL_PREVIEW, 3),
+                   (self._build_output(body),  COL_OUTPUT,  0))
+        last = len(columns) - 1
+        for col, (card, min_w, weight) in enumerate(columns):
+            pad = (0 if col == 0 else GAP // 2, 0 if col == last else GAP // 2)
+            body.columnconfigure(col, weight=weight, minsize=min_w + sum(pad))
+            card.grid(row=0, column=col, sticky="nsew", padx=pad)
 
     # ── Chrome: header ───────────────────────
 
@@ -532,11 +541,10 @@ class WebPConverterApp(_AppBase):
             text_color=FAINT, anchor="w")
         self.progress_text.pack(fill="x", padx=S_LG, pady=(0, S_MD))
 
-    # ── Left column: source ──────────────────
+    # ── Column 1: source ─────────────────────
 
     def _build_source(self, parent):
         card, head, body = panel(parent, "Source", pad_x=S_MD)
-        card.grid(row=0, column=0, sticky="nsew")
 
         self.queue_count_label = ctk.CTkLabel(head, text="", font=F.mono,
                                               text_color=FAINT)
@@ -570,24 +578,29 @@ class WebPConverterApp(_AppBase):
             w.bind("<Enter>", lambda _e: self._hover_drop(True))
             w.bind("<Leave>", lambda _e: self._hover_drop(False))
 
-        # Queue
+        # Queue — small requested height: it expands into whatever the column
+        # offers, and must not be what sets the window's minimum height.
         self.files_list_frame = ctk.CTkScrollableFrame(
-            body, fg_color="transparent", corner_radius=0,
+            body, fg_color="transparent", corner_radius=0, height=120,
             scrollbar_button_color=LINE,
             scrollbar_button_hover_color=FAINT)
         self.files_list_frame.pack(fill="both", expand=True, pady=(S_MD, 0))
 
+        # Equal halves via a uniform grid; width=1 so the buttons ask only for
+        # their text, not CTk's 140px default, and never widen the column.
         actions = ctk.CTkFrame(body, fg_color="transparent")
         actions.pack(fill="x", padx=S_XS, pady=(S_MD, 0))
+        actions.columnconfigure((0, 1), weight=1, uniform="actions")
 
         self.add_folder_btn = secondary_button(
-            actions, "Add folder", self.select_folder_of_webps, height=H_MINI)
-        self.add_folder_btn.pack(side="left", expand=True, fill="x",
-                                 padx=(0, S_SM))
+            actions, "Add folder", self.select_folder_of_webps,
+            height=H_MINI, width=1)
+        self.add_folder_btn.grid(row=0, column=0, sticky="ew", padx=(0, S_SM // 2))
 
         self.clear_all_btn = secondary_button(
-            actions, "Clear all", self.clear_file_list, height=H_MINI)
-        self.clear_all_btn.pack(side="left", expand=True, fill="x")
+            actions, "Clear all", self.clear_file_list, height=H_MINI, width=1)
+        self.clear_all_btn.grid(row=0, column=1, sticky="ew", padx=(S_SM // 2, 0))
+        return card
 
     def _hover_drop(self, on: bool):
         if self._converting:
@@ -599,26 +612,39 @@ class WebPConverterApp(_AppBase):
             fg_color=DROP_TINT if on else RAISED,
             border_color=ACCENT if on else LINE)
 
-    # ── Right column: preview + output ───────
+    # ── Column 2: preview ────────────────────
 
-    def _build_output(self, parent):
-        prev_card, _, prev_body = panel(parent, "Preview")
-        prev_card.grid(row=0, column=0, sticky="nsew", pady=(0, GAP))
+    def _build_preview(self, parent):
+        card, _, body = panel(parent, "Preview")
+
+        # The well takes whatever space the column gives it. The label is
+        # placed, not packed, so the image never feeds back into the well's
+        # requested size; frames are re-fitted when the well is resized.
+        self.preview_well = ctk.CTkFrame(
+            body, fg_color=RAISED, corner_radius=R_CTRL,
+            width=PREVIEW_MIN[0], height=PREVIEW_MIN[1])
+        self.preview_well.pack(fill="both", expand=True)
+        self.preview_well.bind("<Configure>", self._on_preview_resize)
+        self.preview_well.bind("<Button-1>", lambda _e: self._toggle_preview())
 
         self.preview_label = ctk.CTkLabel(
-            prev_body, text="Select a file to preview",
-            font=F.small, text_color=FAINT,
-            width=PREVIEW_W, height=PREVIEW_H,
-            corner_radius=R_CTRL, fg_color=RAISED)
-        self.preview_label.pack(expand=True)
+            self.preview_well, text="Select a file to preview",
+            font=F.small, text_color=FAINT, fg_color="transparent")
+        self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
         self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
 
-        self.preview_info = ctk.CTkLabel(prev_body, text="", font=F.mono,
-                                         text_color=FAINT)
-        self.preview_info.pack(pady=(S_MD, 0))
+        # Fixed wrap width: a status line must never push the column wider,
+        # or the well moves under frames that were just fitted to it.
+        self.preview_info = ctk.CTkLabel(body, text="", font=F.mono,
+                                         text_color=FAINT, justify="center",
+                                         wraplength=PREVIEW_MIN[0])
+        self.preview_info.pack(fill="x", pady=(S_MD, 0))
+        return card
 
+    # ── Column 3: output ─────────────────────
+
+    def _build_output(self, parent):
         out_card, _, form = panel(parent, "Output")
-        out_card.grid(row=1, column=0, sticky="nsew")
         form.columnconfigure(0, weight=0, minsize=LABEL_COL)
         form.columnconfigure(1, weight=1)
 
@@ -645,23 +671,28 @@ class WebPConverterApp(_AppBase):
             corner_radius=R_CTRL, height=H_CTRL)
         self.res_menu.grid(row=1, column=1, sticky="ew", pady=(0, S_SM))
 
+        # Entries on one line, hint beneath — kept inside the control column so
+        # showing Custom never widens the output panel.
         self.custom_res_row = ctk.CTkFrame(form, fg_color="transparent")
+        entries = ctk.CTkFrame(self.custom_res_row, fg_color="transparent")
+        entries.pack(anchor="w")
         self.custom_res_width = ctk.CTkEntry(
-            self.custom_res_row, width=84, placeholder_text="Width",
+            entries, width=84, placeholder_text="Width",
             fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
             placeholder_text_color=FAINT, text_color=TEXT,
             font=F.body, corner_radius=R_CTRL, height=H_MINI)
         self.custom_res_width.pack(side="left")
-        ctk.CTkLabel(self.custom_res_row, text="×", font=F.body,
+        ctk.CTkLabel(entries, text="×", font=F.body,
                      text_color=FAINT).pack(side="left", padx=S_SM)
         self.custom_res_height = ctk.CTkEntry(
-            self.custom_res_row, width=84, placeholder_text="Height",
+            entries, width=84, placeholder_text="Height",
             fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
             placeholder_text_color=FAINT, text_color=TEXT,
             font=F.body, corner_radius=R_CTRL, height=H_MINI)
         self.custom_res_height.pack(side="left")
-        hint(self.custom_res_row, "px — exact, may stretch").pack(
-            side="left", padx=(S_MD, 0))
+        hint(entries, "px").pack(side="left", padx=(S_SM, 0))
+        hint(self.custom_res_row, "Exact size — may stretch the image").pack(
+            anchor="w", pady=(S_XS, 0))
 
         # Quality
         form_label(form, "Quality", 3)
@@ -705,6 +736,7 @@ class WebPConverterApp(_AppBase):
             self.fps_slider, self.crf_slider, self.combine_check,
             self.custom_res_width, self.custom_res_height,
         ]
+        return out_card
 
     def _slider_row(self, parent, row, var, from_, to, steps, suffix, attr,
                     pady=(0, S_SM)):
@@ -757,9 +789,9 @@ class WebPConverterApp(_AppBase):
         self._theme = "light" if self._theme == "dark" else "dark"
         ctk.set_appearance_mode(self._theme)
         self.theme_btn.configure(text="☾" if self._theme == "dark" else "☀")
-        # The preview checkerboard is a baked PIL image — rebuild it.
+        # The preview checkerboard is a baked PIL image — rebuild it in place.
         if self.selected_file:
-            self.show_preview(self.selected_file)
+            self.show_preview(self.selected_file, keep_current=True)
         self.save_current_settings()
 
     # ── Settings persistence ─────────────────
@@ -1194,23 +1226,60 @@ class WebPConverterApp(_AppBase):
 
     # ── Preview ──────────────────────────────
 
-    def show_preview(self, filepath: str):
-        self._stop_preview()
+    def _preview_box(self) -> tuple:
+        """Fit box for preview frames, in CTk (scaled) units.
+
+        Inset by the well's corner radius so a frame's square corners never
+        cover the well's rounded ones.
+        """
+        well = self.preview_well
+        scale = ctk.ScalingTracker.get_widget_scaling(well)
+        w, h = well.winfo_width() / scale, well.winfo_height() / scale
+        if w <= 1 or h <= 1:      # not laid out yet
+            w, h = PREVIEW_MIN
+        inset = 2 * R_CTRL
+        return max(2, int(w) - inset), max(2, int(h) - inset)
+
+    def _on_preview_resize(self, _event=None):
+        # Debounced: a window drag fires dozens of Configure events.
+        if self._resize_after_id:
+            self.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.after(180, self._apply_preview_resize)
+
+    def _apply_preview_resize(self):
+        self._resize_after_id = None
+        if self._closing or not self.selected_file:
+            return
+        if self._preview_box() != self._preview_fit:
+            self.show_preview(self.selected_file, keep_current=True)
+
+    def show_preview(self, filepath: str, keep_current: bool = False):
+        """Load frames for filepath in the background.
+
+        keep_current keeps the visible animation running (and its play/pause
+        state) until the new frames are ready — used for resizes and theme
+        switches of the same file, so they don't flash "Loading…".
+        """
         self._preview_gen += 1
         gen = self._preview_gen
-        self._detach_preview_image()
-        self.preview_frames = []
-        self.preview_label.configure(image=None, text="Loading preview…")
-        self.preview_info.configure(text="")
+        box = self._preview_fit = self._preview_box()
+        if not keep_current:
+            self._stop_preview()
+            self._detach_preview_image()
+            self.preview_frames = []
+            self.preview_label.configure(image=None, text="Loading preview…")
+            self.preview_info.configure(text="")
         threading.Thread(
-            target=self._load_preview_frames, args=(filepath, gen), daemon=True
+            target=self._load_preview_frames,
+            args=(filepath, gen, box, keep_current), daemon=True,
         ).start()
 
-    def _load_preview_frames(self, filepath: str, gen: int):
+    def _load_preview_frames(self, filepath: str, gen: int, box: tuple,
+                             resume: bool):
         try:
             frames = []
             with Image.open(filepath) as im:
-                w, h = fit_box(im.width, im.height, PREVIEW_W, PREVIEW_H)
+                w, h = fit_box(im.width, im.height, *box)
                 checker = checkerboard((w, h))
                 fallback_ms = int(1000 / max(1, self.fps_value.get()))
                 for i, frame_img in enumerate(ImageSequence.Iterator(im)):
@@ -1226,22 +1295,33 @@ class WebPConverterApp(_AppBase):
                     frames.append(
                         (ctk.CTkImage(light_image=composed, size=(w, h)),
                          max(20, delay)))
-            self._ui(self._start_preview, frames, gen)
+            self._ui(self._start_preview, frames, gen, resume)
         except Exception as e:
-            self._ui(self.preview_label.configure,
-                     image=None, text=f"Preview error: {e}")
+            self._ui(self._preview_failed, gen, str(e))
 
-    def _start_preview(self, frames: list, gen: int):
+    def _preview_failed(self, gen: int, message: str):
         if gen != self._preview_gen:
+            return     # a newer preview superseded this one
+        self._stop_preview()
+        self._detach_preview_image()
+        self.preview_frames = []
+        self.preview_label.configure(image=None, text=f"Preview error: {message}")
+        self.preview_info.configure(text="")
+
+    def _start_preview(self, frames: list, gen: int, resume: bool = False):
+        if gen != self._preview_gen or not frames:
             return
+        # A resumed preview (same file, new size or theme) keeps the frame on
+        # screen and its play/pause state.
+        running = self.preview_running if resume else True
+        same_clip = resume and len(frames) == len(self.preview_frames)
+        index = self.preview_index if same_clip else 0
+        self._stop_preview()
         self.preview_frames = frames
-        self.preview_index  = 0
-        if frames:
-            img = frames[0][0]
-            self.preview_label.configure(image=img, text="", cursor="hand2")
-            self.preview_label.image = img
-            self.preview_running = True
-            self._update_preview_info()
+        self._show_frame(index)
+        self.preview_running = running
+        self._update_preview_info()
+        if running:
             self._animate_preview()
 
     def _update_preview_info(self):
@@ -1253,7 +1333,7 @@ class WebPConverterApp(_AppBase):
         state = "playing" if self.preview_running else "paused"
         suffix = f" (first {MAX_PREVIEW_FRAMES})" if n >= MAX_PREVIEW_FRAMES else ""
         self.preview_info.configure(
-            text=f"{n} frames{suffix}  ·  {total:.1f}s  ·  {state} — click or Space")
+            text=f"{n} frames{suffix}  ·  {total:.1f}s  ·  {state}")
 
     def _toggle_preview(self):
         if self.preview_running:
@@ -1270,14 +1350,26 @@ class WebPConverterApp(_AppBase):
         self._toggle_preview()
         return "break"
 
+    def _show_frame(self, index: int):
+        """preview_index is always the frame on screen."""
+        self.preview_index = index
+        img = self.preview_frames[index][0]
+        self.preview_label.configure(image=img, text="", cursor="hand2")
+        self.preview_label.image = img
+
     def _animate_preview(self):
+        """Show the current frame for its own duration, then advance."""
         if not self.preview_frames or not self.preview_running:
             return
-        img, delay = self.preview_frames[self.preview_index]
-        self.preview_label.configure(image=img, text="")
-        self.preview_label.image = img
-        self.preview_index = (self.preview_index + 1) % len(self.preview_frames)
-        self._preview_after_id = self.after(delay, self._animate_preview)
+        self._show_frame(self.preview_index)
+        delay = self.preview_frames[self.preview_index][1]
+        self._preview_after_id = self.after(delay, self._advance_preview)
+
+    def _advance_preview(self):
+        self._preview_after_id = None
+        if self.preview_frames:
+            self.preview_index = (self.preview_index + 1) % len(self.preview_frames)
+            self._animate_preview()
 
     def _stop_preview(self):
         self.preview_running = False
