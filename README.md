@@ -28,7 +28,7 @@ Built in Python with a dark/light themed UI using [CustomTkinter](https://github
 - Convert animated WebP images to `.mp4`, `.mkv`, `.webm`, or `.gif`
 - **Original frame timing** — preserves each frame's real duration (variable frame rate), or force a constant FPS (1-60)
 - Resolution presets `480p` / `720p` / `1080p` / `4K` keep aspect ratio (no stretching), plus exact custom dimensions
-- Compression quality control (CRF 18-30)
+- Compressed output with quality control (CRF 18-30), or **bit-exact lossless** — see [Lossless output](#lossless-output)
 - Combine multiple WebP files into a single output — mixed sizes are letterboxed, GIF supported
 - **Drag & drop** files or folders straight into the window
 - Live progress with real encode percentage
@@ -39,9 +39,22 @@ Built in Python with a dark/light themed UI using [CustomTkinter](https://github
 - Keyboard shortcuts: `Ctrl+O` add files, `Ctrl+Enter` convert, `Space` pause preview, `Delete` remove, `Escape` cancel
 - Dark and light themes, toggled from the header
 - Settings, theme, and window size persist between sessions
-- Modern dark UI
 - Standalone EXE/binary build via PyInstaller
 - Cross-platform: Windows, macOS, Linux
+
+---
+
+## Lossless output
+
+Set **Quality → Lossless** to keep every frame bit-for-bit identical to the source. Each container uses its own lossless encoder:
+
+| Format | Encoder | Transparency |
+|---|---|---|
+| `.mkv` | FFV1 | kept |
+| `.mp4` | H.264 (RGB, lossless) | dropped |
+| `.webm` | VP9 (RGB, lossless) | dropped |
+
+Lossless files are much larger than compressed ones, and many browsers, phones and built-in players can't open them — VLC and mpv can. MKV is the safest choice and the only one that keeps transparency. GIF is limited to 256 colours, so it has no lossless mode.
 
 ---
 

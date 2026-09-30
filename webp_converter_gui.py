@@ -64,6 +64,52 @@ RESOLUTION_MAP = {
     "4K":    (3840, 2160),
 }
 
+# Lossless ffmpeg arguments per container, each verified bit-exact by decoding
+# the output back. Compressed output's yuv420p can't be used here: 4:2:0 chroma
+# subsampling discards colour even at qp 0, so lossless changes pixel format,
+# not just the quality knob.
+LOSSLESS_ARGS = {
+    ".mp4":  ["-c:v", "libx264rgb", "-qp", "0", "-pix_fmt", "rgb24",
+              "-preset", "medium"],
+    ".mkv":  ["-c:v", "ffv1", "-level", "3", "-pix_fmt", "rgb32"],   # keeps alpha
+    ".webm": ["-c:v", "libvpx-vp9", "-lossless", "1", "-pix_fmt", "gbrp",
+              "-row-mt", "1", "-deadline", "good", "-cpu-used", "2"],
+}
+
+
+def encoder_args(fmt: str, crf: int, lossless: bool) -> list:
+    """ffmpeg video arguments for a container."""
+    if lossless:
+        args = list(LOSSLESS_ARGS[fmt])
+    elif fmt == ".webm":
+        args = ["-c:v", "libvpx-vp9", "-crf", str(crf), "-b:v", "0",
+                "-row-mt", "1", "-deadline", "good", "-cpu-used", "2",
+                "-pix_fmt", "yuv420p"]
+    else:
+        args = ["-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
+                "-preset", "medium"]
+    if fmt == ".mp4":
+        args += ["-movflags", "+faststart"]
+    return args
+
+
+def keeps_alpha(fmt: str, lossless: bool) -> bool:
+    """Only lossless MKV (FFV1 rgb32) carries an alpha channel."""
+    return lossless and fmt == ".mkv"
+
+
+# Quality hints. Sizes are "much larger" rather than a multiplier: measured
+# growth ran from ~6x to ~20x and depends heavily on content.
+HINT_COMPRESSED = "18 best quality  ·  30 smallest file"
+HINT_GIF = "GIF is limited to 256 colours, so quality settings don't apply."
+HINT_LOSSLESS = {
+    ".mp4":  "Bit-exact, much larger. Many players can't open lossless MP4 "
+             "— MKV is safer.",
+    ".mkv":  "Bit-exact, much larger. Keeps transparency. Plays in VLC and mpv.",
+    ".webm": "Bit-exact, much larger. Many browsers and players can't open "
+             "lossless WebM.",
+}
+
 # ─────────────────────────────────────────────
 # Design tokens
 #
@@ -118,6 +164,7 @@ GAP      = 10
 BORDER_W = 1
 
 LABEL_COL = 74   # width of the form label column
+HINT_WRAP = 264  # narrower than the output control column: hints never widen it
 
 # ── Layout ─────────────────────────────────────
 # Three columns side by side, so the window is as tall as the tallest column
@@ -211,14 +258,24 @@ def fit_box(w, h, box_w, box_h):
     return make_even(max(2, round(w * ratio)), max(2, round(h * ratio)))
 
 
-def letterbox(img: Image.Image, target: tuple) -> Image.Image:
-    """Aspect-fit img inside target canvas, centered on opaque black."""
+def letterbox(img: Image.Image, target: tuple, keep_alpha: bool = False) -> Image.Image:
+    """Aspect-fit img inside a target-sized canvas, centred.
+
+    Bars are opaque black and img is composited onto them — unless the output
+    keeps alpha, where bars are transparent and img's pixels, alpha included,
+    are copied unchanged so every clip in a combined file keeps transparency.
+    """
     if img.size == target:
         return img
     w, h = fit_box(img.width, img.height, *target)
     fitted = img.resize((w, h), Image.LANCZOS)
-    canvas = Image.new("RGBA", target, (0, 0, 0, 255))
-    canvas.paste(fitted, ((target[0] - w) // 2, (target[1] - h) // 2), fitted)
+    pos = ((target[0] - w) // 2, (target[1] - h) // 2)
+    if keep_alpha:
+        canvas = Image.new("RGBA", target, (0, 0, 0, 0))
+        canvas.paste(fitted, pos)             # copy, don't blend
+    else:
+        canvas = Image.new("RGBA", target, (0, 0, 0, 255))
+        canvas.paste(fitted, pos, fitted)
     return canvas
 
 
@@ -307,6 +364,15 @@ def ghost_button(parent, text, command, size=26, **kw):
                          width=size, height=size, **kw)
 
 
+def segmented(parent, values, variable, command=None):
+    return ctk.CTkSegmentedButton(
+        parent, values=values, variable=variable, command=command,
+        fg_color=RAISED, selected_color=ACCENT, selected_hover_color=ACCENT_HI,
+        unselected_color=RAISED, unselected_hover_color=HOVER,
+        text_color=TEXT, text_color_disabled=FAINT, font=F.body,
+        corner_radius=R_CTRL, height=H_CTRL, border_width=2)
+
+
 def form_label(parent, text, row):
     lbl = ctk.CTkLabel(parent, text=text, font=F.body,
                        text_color=DIM, anchor="w", width=LABEL_COL)
@@ -315,7 +381,8 @@ def form_label(parent, text, row):
 
 
 def hint(parent, text):
-    return ctk.CTkLabel(parent, text=text, font=F.small,
+    # height=1: size to the text; CTk's default 28px label height is dead space.
+    return ctk.CTkLabel(parent, text=text, font=F.small, height=1,
                         text_color=FAINT, anchor="w", justify="left")
 
 
@@ -387,7 +454,10 @@ class WebPConverterApp(_AppBase):
         self.use_source_timing = ctk.BooleanVar(value=True)
         self.resolution_preset = ctk.StringVar(value="Same Resolution")
         self.crf_value         = ctk.IntVar(value=22)
+        self.lossless          = ctk.BooleanVar(value=False)
         self._timing_mode      = ctk.StringVar(value="Original")
+        self._quality_mode     = ctk.StringVar(value="Compressed")
+        self._locked           = False      # controls locked during conversion
 
         # Preview state
         self.preview_frames:   list = []   # list of (CTkImage, delay_ms)
@@ -650,13 +720,8 @@ class WebPConverterApp(_AppBase):
 
         # Format
         form_label(form, "Format", 0)
-        self.format_seg = ctk.CTkSegmentedButton(
-            form, values=list(VALID_FORMATS), variable=self.output_format,
-            fg_color=RAISED, selected_color=ACCENT,
-            selected_hover_color=ACCENT_HI,
-            unselected_color=RAISED, unselected_hover_color=HOVER,
-            text_color=TEXT, font=F.body,
-            corner_radius=R_CTRL, height=H_CTRL, border_width=2)
+        self.format_seg = segmented(form, list(VALID_FORMATS), self.output_format,
+                                    lambda _fmt: self._sync_controls())
         self.format_seg.grid(row=0, column=1, sticky="ew", pady=(0, S_SM))
 
         # Size
@@ -694,29 +759,34 @@ class WebPConverterApp(_AppBase):
         hint(self.custom_res_row, "Exact size — may stretch the image").pack(
             anchor="w", pady=(S_XS, 0))
 
-        # Quality
+        # Quality and Timing share one shape: a mode switch, then the slider it
+        # governs. The slider's readout carries its unit, so it needs no label.
         form_label(form, "Quality", 3)
+        self.quality_seg = segmented(form, ["Compressed", "Lossless"],
+                                     self._quality_mode, self._on_quality_mode)
+        self.quality_seg.grid(row=3, column=1, sticky="ew", pady=(0, S_SM))
         self.crf_slider = self._slider_row(
-            form, row=3, var=self.crf_value, from_=18, to=30, steps=12,
+            form, row=4, var=self.crf_value, from_=18, to=30, steps=12,
             suffix="CRF", attr="crf_label")
-        hint(form, "18 lossless-ish  ·  30 smallest file").grid(
-            row=4, column=1, sticky="w", pady=(0, S_MD))
 
-        # Timing
-        form_label(form, "Timing", 5)
-        self.timing_seg = ctk.CTkSegmentedButton(
-            form, values=["Original", "Fixed FPS"], variable=self._timing_mode,
-            command=self._on_timing_mode,
-            fg_color=RAISED, selected_color=ACCENT,
-            selected_hover_color=ACCENT_HI,
-            unselected_color=RAISED, unselected_hover_color=HOVER,
-            text_color=TEXT, font=F.body,
-            corner_radius=R_CTRL, height=H_CTRL, border_width=2)
-        self.timing_seg.grid(row=5, column=1, sticky="ew", pady=(0, S_SM))
+        # The hint changes with format and mode; reserving two lines up front
+        # keeps the rows below from jumping when it does.
+        self.quality_hint = hint(form, "\n")
+        self.quality_hint.configure(wraplength=HINT_WRAP)
+        self.quality_hint.grid(row=5, column=1, sticky="nw", pady=(0, S_MD))
+        form.update_idletasks()
+        # Physical pixels on both sides: the measured height, and CTk's pady
+        # after scaling (row minsize is a raw Tk value).
+        scale = ctk.ScalingTracker.get_widget_scaling(form)
+        form.rowconfigure(5, minsize=self.quality_hint.winfo_reqheight()
+                                     + round(S_MD * scale))
 
-        form_label(form, "Rate", 6)
+        form_label(form, "Timing", 6)
+        self.timing_seg = segmented(form, ["Original", "Fixed FPS"],
+                                    self._timing_mode, self._on_timing_mode)
+        self.timing_seg.grid(row=6, column=1, sticky="ew", pady=(0, S_SM))
         self.fps_slider = self._slider_row(
-            form, row=6, var=self.fps_value, from_=1, to=60, steps=59,
+            form, row=7, var=self.fps_value, from_=1, to=60, steps=59,
             suffix="FPS", attr="fps_label", pady=(0, S_MD))
 
         # Combine
@@ -730,10 +800,11 @@ class WebPConverterApp(_AppBase):
             checkbox_width=18, checkbox_height=18)
         self.combine_check.grid(row=8, column=0, columnspan=2, sticky="w")
 
+        # Widgets whose state depends only on the lock. Segmented controls and
+        # sliders also depend on each other, so _sync_controls owns them.
         self._lockable = [
             self.add_folder_btn, self.clear_all_btn, self.output_folder_btn,
-            self.format_seg, self.res_menu, self.timing_seg,
-            self.fps_slider, self.crf_slider, self.combine_check,
+            self.res_menu, self.combine_check,
             self.custom_res_width, self.custom_res_height,
         ]
         return out_card
@@ -745,7 +816,7 @@ class WebPConverterApp(_AppBase):
 
         val_lbl = ctk.CTkLabel(holder, text=f"{var.get()} {suffix}",
                                font=F.mono_b, text_color=ACCENT_TX,
-                               width=62, anchor="e")
+                               width=62, height=1, anchor="e")
         val_lbl.pack(side="right")
         setattr(self, attr, val_lbl)
 
@@ -768,19 +839,51 @@ class WebPConverterApp(_AppBase):
 
     def _on_timing_mode(self, choice):
         self.use_source_timing.set(choice == "Original")
-        self._on_timing_toggle()
+        self._sync_controls()
+
+    def _on_quality_mode(self, choice):
+        self.lossless.set(choice == "Lossless")
+        self._sync_controls()
+
+    # A disabled control must not read as live: state and colour move together.
 
     @staticmethod
     def _style_slider(slider, label, enabled: bool):
-        """State and colour move together — a disabled slider must not read as live."""
         slider.configure(state="normal" if enabled else "disabled",
                          progress_color=ACCENT if enabled else LINE,
                          button_color=ACCENT if enabled else FAINT)
         label.configure(text_color=ACCENT_TX if enabled else FAINT)
 
-    def _on_timing_toggle(self):
+    @staticmethod
+    def _style_segmented(seg, enabled: bool):
+        seg.configure(state="normal" if enabled else "disabled",
+                      selected_color=ACCENT if enabled else HOVER,
+                      selected_hover_color=ACCENT_HI if enabled else HOVER)
+
+    def _quality_hint(self) -> str:
+        fmt = self.output_format.get()
+        if fmt == ".gif":
+            return HINT_GIF
+        return HINT_LOSSLESS[fmt] if self.lossless.get() else HINT_COMPRESSED
+
+    def _sync_controls(self):
+        """Apply every dependency between controls — the only place that does.
+
+        The conversion lock disables everything; otherwise a GIF target
+        disables Quality, Lossless disables the CRF slider, and Original
+        timing disables the Rate slider.
+        """
+        locked = self._locked
+        gif = self.output_format.get() == ".gif"
+        lossless = self.lossless.get() and not gif
+        self._style_segmented(self.format_seg, not locked)
+        self._style_segmented(self.timing_seg, not locked)
+        self._style_segmented(self.quality_seg, not (locked or gif))
+        self._style_slider(self.crf_slider, self.crf_label,
+                           not (locked or gif or lossless))
         self._style_slider(self.fps_slider, self.fps_label,
-                           not self.use_source_timing.get())
+                           not (locked or self.use_source_timing.get()))
+        self.quality_hint.configure(text=self._quality_hint())
         self._refresh_meta_labels()
 
     # ── Theme ────────────────────────────────
@@ -804,6 +907,7 @@ class WebPConverterApp(_AppBase):
             "resolution":    self.resolution_preset.get(),
             "combine":       bool(self.combine_videos.get()),
             "source_timing": bool(self.use_source_timing.get()),
+            "lossless":      bool(self.lossless.get()),
             "custom_w":      self.custom_res_width.get(),
             "custom_h":      self.custom_res_height.get(),
             "output_folder": self.output_folder,
@@ -822,6 +926,8 @@ class WebPConverterApp(_AppBase):
         self.combine_videos.set(bool(s.get("combine", False)))
         self.use_source_timing.set(bool(s.get("source_timing", True)))
         self._timing_mode.set("Original" if self.use_source_timing.get() else "Fixed FPS")
+        self.lossless.set(bool(s.get("lossless", False)))
+        self._quality_mode.set("Lossless" if self.lossless.get() else "Compressed")
         folder = s.get("output_folder", os.getcwd())
         self.output_folder = folder if isinstance(folder, str) and os.path.isdir(folder) else os.getcwd()
         for key, entry in (("custom_w", self.custom_res_width),
@@ -833,7 +939,7 @@ class WebPConverterApp(_AppBase):
         self.fps_label.configure(text=f"{self.fps_value.get()} FPS")
         self.crf_label.configure(text=f"{self.crf_value.get()} CRF")
         self.toggle_custom_res_entry(self.resolution_preset.get())
-        self._on_timing_toggle()
+        self._sync_controls()
 
     # ── UI helpers ───────────────────────────
 
@@ -858,6 +964,7 @@ class WebPConverterApp(_AppBase):
             self.custom_res_row.grid_remove()
 
     def _set_controls_enabled(self, enabled: bool):
+        self._locked = not enabled
         state = "normal" if enabled else "disabled"
         for widget in self._lockable:
             try:
@@ -867,11 +974,7 @@ class WebPConverterApp(_AppBase):
         self.drop_zone.configure(
             border_color=LINE,
             fg_color=RAISED if enabled else SURFACE)
-        for slider, label in ((self.crf_slider, self.crf_label),
-                              (self.fps_slider, self.fps_label)):
-            self._style_slider(slider, label, enabled)
-        if enabled:
-            self._on_timing_toggle()   # re-mutes the rate slider if timing is Original
+        self._sync_controls()
 
     def _ui(self, fn, *args, **kwargs):
         """Schedule a UI call from any thread; safe across window close."""
@@ -1414,10 +1517,14 @@ class WebPConverterApp(_AppBase):
                 self.show_toast(f"Custom size must be 2–{MAX_DIMENSION} px", kind="err")
                 return None
 
+        fmt = self.output_format.get()
+        lossless = self.lossless.get() and fmt != ".gif"
         return {
             "fps":           max(1, self.fps_value.get()),
-            "format":        self.output_format.get(),
+            "format":        fmt,
             "crf":           self.crf_value.get(),
+            "lossless":      lossless,
+            "keep_alpha":    keeps_alpha(fmt, lossless),
             "combine":       self.combine_videos.get(),
             "source_timing": self.use_source_timing.get(),
             "resolution":    self.resolution_preset.get(),
@@ -1629,7 +1736,7 @@ class WebPConverterApp(_AppBase):
                 # info["duration"] is only populated once the frame is loaded
                 duration = int(frame.info.get("duration", 0) or 0)
                 if target_override:
-                    img = letterbox(img, target)
+                    img = letterbox(img, target, settings["keep_alpha"])
                 elif img.size != target:
                     img = img.resize(target, Image.LANCZOS)
                 path = temp_dir / f"frame_{start_idx + i:06d}.png"
@@ -1695,13 +1802,6 @@ class WebPConverterApp(_AppBase):
 
     def _encode_ffmpeg(self, frames, output_path, settings, progress=None):
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        fmt = settings["format"]
-        crf = settings["crf"]
-        codec = {
-            ".mp4":  "libx264",
-            ".mkv":  "libx264",
-            ".webm": "libvpx-vp9",
-        }.get(fmt, "libx264")
 
         durations = self._frame_durations_sec(frames, settings)
         list_path = os.path.join(os.path.dirname(frames[0][0]), "_framelist.txt")
@@ -1716,41 +1816,37 @@ class WebPConverterApp(_AppBase):
             f.write(last_entry)
 
         cmd = [ffmpeg_exe, "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-               "-progress", "pipe:1", "-nostats", "-c:v", codec]
-        if codec == "libvpx-vp9":
-            cmd += ["-crf", str(crf), "-b:v", "0", "-row-mt", "1",
-                    "-deadline", "good", "-cpu-used", "2",
-                    "-pix_fmt", "yuv420p"]
-        else:
-            cmd += ["-crf", str(crf), "-pix_fmt", "yuv420p",
-                    "-preset", "medium"]
-            if fmt == ".mp4":
-                cmd += ["-movflags", "+faststart"]
-        cmd.append(output_path)
+               "-progress", "pipe:1", "-nostats",
+               *encoder_args(settings["format"], settings["crf"],
+                             settings["lossless"]),
+               output_path]
 
         kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-        proc = subprocess.Popen(cmd, **kwargs)
-        self._ffmpeg_proc = proc
-        stderr_chunks: list[bytes] = []
-        drain = threading.Thread(
-            target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True)
-        drain.start()
-        try:
-            total = len(frames)
-            for raw in proc.stdout:
-                line = raw.decode("utf-8", errors="ignore").strip()
-                if progress and total and line.startswith("frame="):
-                    try:
-                        progress(min(1.0, int(line.split("=", 1)[1]) / total))
-                    except ValueError:
-                        pass
-            proc.wait()
-        finally:
-            self._ffmpeg_proc = None
-        drain.join(timeout=2)
+        # The context manager closes both pipes; without it every encode
+        # leaked two handles.
+        with subprocess.Popen(cmd, **kwargs) as proc:
+            self._ffmpeg_proc = proc
+            stderr_chunks: list[bytes] = []
+            drain = threading.Thread(
+                target=lambda: stderr_chunks.append(proc.stderr.read()),
+                daemon=True)
+            drain.start()
+            try:
+                total = len(frames)
+                for raw in proc.stdout:
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                    if progress and total and line.startswith("frame="):
+                        try:
+                            progress(min(1.0, int(line.split("=", 1)[1]) / total))
+                        except ValueError:
+                            pass
+                proc.wait()
+            finally:
+                self._ffmpeg_proc = None
+            drain.join(timeout=2)
 
         if proc.returncode != 0 and not self._cancel_requested:
             err = (stderr_chunks[0] if stderr_chunks else b"")
