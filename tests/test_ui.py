@@ -148,6 +148,78 @@ class UITest(AppFixture, unittest.TestCase):
         app.resolution_preset.set("Same Resolution")
         app.toggle_custom_res_entry("Same Resolution")
 
+    # ── Custom size form ─────────────────────
+
+    def _custom(self, width, height):
+        app = self.app
+        app.resolution_preset.set("Custom")
+        app.toggle_custom_res_entry("Custom")
+        for entry, value in ((app.custom_res_width, width),
+                             (app.custom_res_height, height)):
+            entry.delete(0, "end")
+            if value:
+                entry.insert(0, value)
+
+    def _leave_custom(self):
+        self.app.resolution_preset.set("Same Resolution")
+        self.app.toggle_custom_res_entry("Same Resolution")
+
+    def test_size_fields_keep_visible_labels(self):
+        app = self.app
+        labels = [w.cget("text") for w in app.custom_res_width.master.winfo_children()
+                  if isinstance(w, G.ctk.CTkLabel)]
+        self.assertIn("W", labels)
+        self.assertIn("H", labels)
+
+    def test_invalid_size_is_reported_next_to_the_field(self):
+        app = self.app
+        self._custom("800", "9999")
+        toasts = len(app._toasts)
+        try:
+            self.assertIsNone(app._validated_settings())
+            pump(app, 50)
+            self.assertEqual(len(app._toasts), toasts, "field errors must not toast")
+            self.assertEqual(app.custom_res_height.cget("border_color"), G.DANGER)
+            self.assertEqual(app.custom_res_width.cget("border_color"), G.RAISED)
+            self.assertTrue(app.custom_hint.cget("text").startswith("✕"))
+            self.assertIn("Height", app.custom_hint.cget("text"))
+            self.assertEqual(app.custom_hint.cget("text_color"), G.DANGER)
+            # focus_lastfor: the window's focus widget, even if another
+            # application currently has the OS focus.
+            self.assertIs(app.focus_lastfor(), app.custom_res_height._entry)
+        finally:
+            self._leave_custom()
+        self.assertEqual(app.custom_hint.cget("text"), G.HINT_CUSTOM)
+
+    def test_size_error_clears_as_you_fix_it(self):
+        app = self.app
+        self._custom("abc", "600")
+        try:
+            app._on_size_blur()
+            self.assertIn("whole number", app.custom_hint.cget("text"))
+            app.custom_res_width.delete(0, "end")
+            app.custom_res_width.insert(0, "800")
+            app._on_size_key()
+            self.assertEqual(app.custom_hint.cget("text"), G.HINT_CUSTOM)
+            self.assertEqual(app.custom_res_width.cget("border_color"), G.RAISED)
+        finally:
+            self._leave_custom()
+
+    def test_typing_and_empty_fields_are_not_flagged_early(self):
+        app = self.app
+        self._custom("", "")
+        try:
+            app.custom_res_width.insert(0, "1")      # on the way to "128"
+            app._on_size_key()
+            self.assertEqual(app.custom_hint.cget("text"), G.HINT_CUSTOM)
+            app.custom_res_width.delete(0, "end")
+            app._on_size_blur()                        # left empty: not yet an error
+            self.assertEqual(app.custom_hint.cget("text"), G.HINT_CUSTOM)
+            self.assertIsNone(app._validated_settings())   # but Convert insists
+            self.assertIn("Enter a width", app.custom_hint.cget("text"))
+        finally:
+            self._leave_custom()
+
     def test_timing_mode_drives_rate_slider(self):
         app = self.app
         for mode, rate_live in (("Fixed FPS", True), ("Original", False)):

@@ -98,6 +98,8 @@ def keeps_alpha(fmt: str, lossless: bool) -> bool:
     return lossless and fmt == ".mkv"
 
 
+HINT_CUSTOM = "Exact size — may stretch the image"
+
 # Quality hints. Sizes are "much larger" rather than a multiplier: measured
 # growth ran from ~6x to ~20x and depends heavily on content.
 HINT_COMPRESSED = "18 best quality  ·  30 smallest file"
@@ -518,6 +520,7 @@ class WebPConverterApp(_AppBase):
         self._timing_mode      = ctk.StringVar(value="Original")
         self._quality_mode     = ctk.StringVar(value="Compressed")
         self._locked           = False      # controls locked during conversion
+        self._size_error_shown = False
 
         # Preview state
         self.preview_frames:   list = []   # list of (CTkImage, delay_ms)
@@ -817,28 +820,19 @@ class WebPConverterApp(_AppBase):
             corner_radius=R_CTRL, height=H_CTRL)
         self.res_menu.grid(row=1, column=1, sticky="ew", pady=(0, S_SM))
 
-        # Entries on one line, hint beneath — kept inside the control column so
+        # W/H labels stay visible while typing (a placeholder alone vanishes).
+        # The hint beneath doubles as the error line, so errors appear next to
+        # the field without moving anything. Kept inside the control column so
         # showing Custom never widens the output panel.
         self.custom_res_row = ctk.CTkFrame(form, fg_color="transparent")
         entries = ctk.CTkFrame(self.custom_res_row, fg_color="transparent")
         entries.pack(anchor="w")
-        self.custom_res_width = ctk.CTkEntry(
-            entries, width=84, placeholder_text="Width",
-            fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
-            placeholder_text_color=DIM, text_color=TEXT,
-            font=F.body, corner_radius=R_CTRL, height=H_MINI)
-        self.custom_res_width.pack(side="left")
-        ctk.CTkLabel(entries, text="×", font=F.body,
-                     text_color=FAINT).pack(side="left", padx=S_SM)
-        self.custom_res_height = ctk.CTkEntry(
-            entries, width=84, placeholder_text="Height",
-            fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
-            placeholder_text_color=DIM, text_color=TEXT,
-            font=F.body, corner_radius=R_CTRL, height=H_MINI)
-        self.custom_res_height.pack(side="left")
+        self.custom_res_width = self._size_entry(entries, "W", "1920")
+        self.custom_res_height = self._size_entry(entries, "H", "1080",
+                                                  pad_left=S_MD)
         hint(entries, "px").pack(side="left", padx=(S_SM, 0))
-        hint(self.custom_res_row, "Exact size — may stretch the image").pack(
-            anchor="w", pady=(S_XS, 0))
+        self.custom_hint = hint(self.custom_res_row, HINT_CUSTOM)
+        self.custom_hint.pack(anchor="w", pady=(S_XS, 0))
 
         # Quality and Timing share one shape: a mode switch, then the slider it
         # governs. The slider's readout carries its unit, so it needs no label.
@@ -882,6 +876,69 @@ class WebPConverterApp(_AppBase):
         self.combine_check.grid(row=8, column=0, columnspan=2, sticky="w")
 
         return out_frame
+
+    def _size_entry(self, parent, label, example, pad_left=0):
+        ctk.CTkLabel(parent, text=label, font=F.body, text_color=DIM,
+                     height=1).pack(side="left", padx=(pad_left, S_SM))
+        # Filled like the other controls; the border is drawn in the fill
+        # colour until it has something to say (an error).
+        entry = ctk.CTkEntry(
+            parent, width=76, placeholder_text=example,
+            fg_color=RAISED, border_color=RAISED, border_width=BORDER_W,
+            placeholder_text_color=DIM, text_color=TEXT,
+            font=F.body, corner_radius=R_CTRL, height=H_MINI)
+        entry.pack(side="left")
+        # Leaving a field flags a bad value; typing only clears or updates an
+        # error already shown, so half-typed numbers ("1" on the way to
+        # "128") are never flagged.
+        entry.bind("<FocusOut>", self._on_size_blur)
+        entry.bind("<KeyRelease>", self._on_size_key)
+        return entry
+
+    def _on_size_blur(self, _event=None):
+        self._check_size_fields(quiet_if_empty=True)
+
+    def _on_size_key(self, _event=None):
+        if self._size_error_shown:
+            self._check_size_fields(quiet_if_empty=True)
+
+    def _size_error(self, entry, name: str):
+        value = entry.get().strip()
+        if not value:
+            return f"Enter a {name.lower()}"
+        if not value.isdigit():
+            return f"{name} must be a whole number"
+        if not 2 <= int(value) <= MAX_DIMENSION:
+            return f"{name} must be 2–{MAX_DIMENSION} px"
+        return None
+
+    def _check_size_fields(self, quiet_if_empty=False):
+        """Mark invalid custom-size fields inline; return the first bad entry.
+
+        quiet_if_empty leaves empty fields unflagged — used while the user is
+        still filling the form in, as opposed to when they press Convert.
+        """
+        first = None
+        for entry, name in ((self.custom_res_width, "Width"),
+                            (self.custom_res_height, "Height")):
+            error = self._size_error(entry, name)
+            if error and quiet_if_empty and not entry.get().strip():
+                error = None
+            entry.configure(border_color=DANGER if error else RAISED)
+            if error and first is None:
+                first = (entry, error)
+        self._size_error_shown = first is not None
+        if first:
+            self.custom_hint.configure(text=f"✕  {first[1]}", text_color=DANGER)
+            return first[0]
+        self.custom_hint.configure(text=HINT_CUSTOM, text_color=DIM)
+        return None
+
+    def _clear_size_errors(self):
+        for entry in (self.custom_res_width, self.custom_res_height):
+            entry.configure(border_color=RAISED)
+        self.custom_hint.configure(text=HINT_CUSTOM, text_color=DIM)
+        self._size_error_shown = False
 
     def _slider_row(self, parent, row, var, from_, to, steps, suffix, attr,
                     pady=(0, S_SM)):
@@ -1039,6 +1096,7 @@ class WebPConverterApp(_AppBase):
             self.custom_res_row.grid(row=2, column=1, sticky="w", pady=(0, S_SM))
         else:
             self.custom_res_row.grid_remove()
+            self._clear_size_errors()      # a hidden field can't show its error
 
     def _set_controls_enabled(self, enabled: bool):
         self._locked = not enabled
@@ -1583,16 +1641,13 @@ class WebPConverterApp(_AppBase):
 
         custom_w = custom_h = 0
         if self.resolution_preset.get() == "Custom":
-            w_str = self.custom_res_width.get().strip()
-            h_str = self.custom_res_height.get().strip()
-            if not (w_str.isdigit() and h_str.isdigit()):
-                self.show_toast("Enter numeric width and height for Custom size",
-                                kind="err")
+            # Reported next to the field, which also takes focus — not a toast.
+            bad = self._check_size_fields()
+            if bad is not None:
+                bad.focus_set()
                 return None
-            custom_w, custom_h = int(w_str), int(h_str)
-            if not (2 <= custom_w <= MAX_DIMENSION and 2 <= custom_h <= MAX_DIMENSION):
-                self.show_toast(f"Custom size must be 2–{MAX_DIMENSION} px", kind="err")
-                return None
+            custom_w = int(self.custom_res_width.get().strip())
+            custom_h = int(self.custom_res_height.get().strip())
 
         fmt = self.output_format.get()
         lossless = self.lossless.get() and fmt != ".gif"
