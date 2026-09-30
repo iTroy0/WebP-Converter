@@ -95,6 +95,16 @@ python3 webp_converter_gui.py
 
 ---
 
+## Running Tests
+
+The suite drives the real app window and real FFmpeg encodes, including bit-exact lossless round-trips, so it needs a desktop session. From the repository root:
+
+```bash
+python -m unittest
+```
+
+---
+
 ## Build Standalone Binary
 
 ### Windows
@@ -124,6 +134,7 @@ The output will be at `dist/WebP Converter`.
 | `start.sh` | Interactive launcher/builder (Linux/macOS) |
 | `install_requirements.bat` | Quick dependency install (Windows) |
 | `app_icon.ico` | Application icon |
+| `tests/` | Test suite: UI behaviour, layout fit, encoding, lossless round-trips |
 
 ---
 
