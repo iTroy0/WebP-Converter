@@ -7,7 +7,8 @@ import tempfile
 import subprocess
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from types import SimpleNamespace
+from tkinter import filedialog, messagebox, font as tkfont
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageSequence, ImageTk
 import imageio_ffmpeg
@@ -18,7 +19,7 @@ try:
 except Exception:
     _HAS_DND = False
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -51,9 +52,11 @@ SETTINGS_FILE = os.path.join(_settings_dir(), "settings.json")
 
 MAX_DIMENSION = 7680
 MAX_PREVIEW_FRAMES = 200
+PREVIEW_W, PREVIEW_H = 420, 190
 
 VALID_FORMATS = (".mp4", ".mkv", ".webm", ".gif")
 VALID_RESOLUTIONS = ("Same Resolution", "480p", "720p", "1080p", "4K", "Custom")
+VALID_THEMES = ("dark", "light")
 
 RESOLUTION_MAP = {
     "480p":  (854,  480),
@@ -62,32 +65,104 @@ RESOLUTION_MAP = {
     "4K":    (3840, 2160),
 }
 
-# ── Design tokens ──────────────────────────────
-BG          = "#141414"
-CARD        = "#1e1e1e"
-CARD2       = "#242424"
-BORDER      = "#2e2e2e"
-ACCENT      = "#00c2d4"
-ACCENT_DIM  = "#007a87"
-TEXT        = "#e8e8e8"
-TEXT_DIM    = "#707070"
-TEXT_MUTED  = "#404040"
-RED         = "#c0392b"
-GREEN       = "#1a8a4a"
-AMBER       = "#b07d20"
-SELECT_BG   = "#0d3d47"
-HOVER_BG    = "#2a2a2a"
+# ─────────────────────────────────────────────
+# Design tokens
+#
+# Colours are (light, dark) pairs. CustomTkinter resolves the pair against the
+# current appearance mode, so switching themes is a single
+# ctk.set_appearance_mode() call — no per-widget bookkeeping.
+# ─────────────────────────────────────────────
 
-_FONT_SANS = "Segoe UI" if sys.platform == "win32" else "SF Pro Display" if sys.platform == "darwin" else "sans-serif"
-_FONT_MONO = "Consolas" if sys.platform == "win32" else "SF Mono" if sys.platform == "darwin" else "monospace"
+BG         = ("#F4F4F6", "#0B0B0D")   # window / gutter
+SURFACE    = ("#FFFFFF", "#141417")   # panels, chrome bars
+RAISED     = ("#F1F1F4", "#1C1C21")   # controls, rows, wells
+HOVER      = ("#E8E8EC", "#24242A")   # hover state of RAISED
+LINE       = ("#E3E3E8", "#27272E")   # hairline borders
 
-FONT_HEAD   = (_FONT_SANS, 13, "bold")
-FONT_BODY   = (_FONT_SANS, 12)
-FONT_SMALL  = (_FONT_SANS, 11)
-FONT_MONO   = (_FONT_MONO, 11)
-FONT_TITLE  = (_FONT_SANS, 22, "bold")
-FONT_LABEL  = (_FONT_SANS, 12)
-FONT_BTN    = (_FONT_SANS, 13, "bold")
+TEXT       = ("#16161A", "#ECECF0")   # primary copy
+DIM        = ("#67676F", "#8D8D96")   # labels, metadata
+FAINT      = ("#7E7E88", "#6E6E78")   # hints, placeholders
+
+ACCENT     = ("#3355E8", "#4463FA")   # interactive fill; ≥4.8:1 with white
+ACCENT_HI  = ("#2843C4", "#3A55E0")   # accent hover
+ACCENT_TX  = ("#2843C4", "#8FA2FF")   # accent-coloured text on SURFACE
+ON_ACCENT  = "#FFFFFF"
+
+OK         = ("#137A3C", "#3DB86A")
+WARN       = ("#9A6207", "#D9922B")
+DANGER     = ("#C42B22", "#E85C50")
+DANGER_HI  = ("#A32019", "#C4453A")
+
+DROP_TINT  = ("#EEF1FE", "#171B2E")   # drag-over fill for the drop zone
+CHECK_A    = ("#EDEDF0", "#1E1E23")   # preview transparency checkerboard
+CHECK_B    = ("#E2E2E7", "#17171B")
+
+# ── Geometry ───────────────────────────────────
+# Content panels round and inset; window chrome is square and full-bleed.
+# Inner gaps always exceed inner radii, so nested corners never collide.
+
+R_PANEL  = 12
+R_CTRL   = 8
+R_CHECK  = 5
+R_PILL   = 3
+
+H_CTRL   = 36
+H_MINI   = 30
+H_CTA    = 44
+H_SLIDER = 18   # track is H_SLIDER - 2*SLIDER_INSET thick
+H_BAR    = 6
+SLIDER_INSET = 6
+
+S_XS, S_SM, S_MD, S_LG, S_XL = 4, 8, 12, 16, 24
+PAD_X, PAD_Y = 16, 14
+GAP      = 10
+BORDER_W = 1
+
+LABEL_COL = 74   # width of the form label column
+
+# ── Typography ─────────────────────────────────
+# Populated by init_fonts() once a Tk root exists — tkfont.families() needs one.
+
+F = SimpleNamespace()
+
+_SANS = ("Segoe UI Variable Text", "Segoe UI", "SF Pro Text",
+         "Inter", "DejaVu Sans", "Helvetica")
+_MONO = ("Cascadia Mono", "Consolas", "SF Mono",
+         "JetBrains Mono", "DejaVu Sans Mono", "Courier New")
+
+
+def _pick_family(candidates, fallback="TkDefaultFont"):
+    try:
+        available = {f.lower() for f in tkfont.families()}
+    except tk.TclError:
+        return fallback
+    for name in candidates:
+        if name.lower() in available:
+            return name
+    return fallback
+
+
+def init_fonts():
+    sans = _pick_family(_SANS)
+    mono = _pick_family(_MONO)
+    F.brand   = (sans, 16, "bold")
+    F.section = (sans, 10, "bold")
+    F.body    = (sans, 12)
+    F.body_b  = (sans, 12, "bold")
+    F.small   = (sans, 11)
+    F.btn     = (sans, 12, "bold")
+    F.cta     = (sans, 14, "bold")
+    F.glyph   = (sans, 20)
+    F.mono    = (mono, 11)
+    F.mono_b  = (mono, 11, "bold")
+
+
+def tone(pair):
+    """Resolve a (light, dark) pair against the live appearance mode.
+
+    Needed only where a colour leaves the widget tree — e.g. a PIL image.
+    """
+    return pair[1] if ctk.get_appearance_mode() == "Dark" else pair[0]
 
 
 def load_settings():
@@ -120,13 +195,6 @@ def make_even(w: int, h: int) -> tuple:
     return w if w % 2 == 0 else w + 1, h if h % 2 == 0 else h + 1
 
 
-def aspect_fit(img_width, img_height, max_size=380):
-    if img_width <= 0 or img_height <= 0:
-        return 2, 2
-    ratio = min(max_size / img_width, max_size / img_height)
-    return make_even(max(2, int(img_width * ratio)), max(2, int(img_height * ratio)))
-
-
 def fit_box(w, h, box_w, box_h):
     """Largest even size fitting inside box while keeping aspect ratio."""
     if w <= 0 or h <= 0:
@@ -157,12 +225,13 @@ def unique_output_path(folder: str, stem: str, ext: str) -> str:
 
 
 def checkerboard(size: tuple, cell: int = 12) -> Image.Image:
-    img = Image.new("RGB", size, "#262626")
+    img = Image.new("RGB", size, tone(CHECK_A))
     draw = ImageDraw.Draw(img)
+    dark = tone(CHECK_B)
     for y in range(0, size[1], cell):
         for x in range(0, size[0], cell):
             if (x // cell + y // cell) % 2 == 0:
-                draw.rectangle([x, y, x + cell - 1, y + cell - 1], fill="#1c1c1c")
+                draw.rectangle([x, y, x + cell - 1, y + cell - 1], fill=dark)
     return img
 
 
@@ -176,21 +245,70 @@ def rgba_to_gif_frame(img: Image.Image) -> Image.Image:
     return frame
 
 
+def short_path(path: str, limit: int = 52) -> str:
+    if len(path) <= limit:
+        return path
+    head, tail = os.path.splitdrive(path)
+    parts = tail.strip(os.sep).split(os.sep)
+    if len(parts) <= 2:
+        return "…" + path[-(limit - 1):]
+    return f"{head}{os.sep}…{os.sep}" + os.sep.join(parts[-2:])
+
+
 # ─────────────────────────────────────────────
-# Reusable section card
+# Widget factories — the single source of style
 # ─────────────────────────────────────────────
 
-def section_card(parent, title: str = "", **kwargs) -> ctk.CTkFrame:
-    card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10,
-                        border_width=1, border_color=BORDER, **kwargs)
+def panel(parent, title: str = "", pad_x: int = PAD_X):
+    """A content panel. Returns (card, head, body); head is None without a title."""
+    card = ctk.CTkFrame(parent, fg_color=SURFACE, corner_radius=R_PANEL,
+                        border_width=BORDER_W, border_color=LINE)
+    head = None
     if title:
-        header = ctk.CTkFrame(card, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(12, 0))
-        ctk.CTkLabel(header, text=title, font=FONT_HEAD,
-                     text_color=ACCENT).pack(side="left")
-        ctk.CTkFrame(header, height=1, fg_color=BORDER).pack(
-            side="left", fill="x", expand=True, padx=(12, 0), pady=1)
-    return card
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=PAD_X, pady=(PAD_Y, 0))
+        ctk.CTkLabel(head, text=title.upper(), font=F.section,
+                     text_color=DIM).pack(side="left")
+    body = ctk.CTkFrame(card, fg_color="transparent")
+    body.pack(fill="both", expand=True, padx=pad_x,
+              pady=(S_MD if title else PAD_Y, PAD_Y))
+    return card, head, body
+
+
+def primary_button(parent, text, command, height=H_CTRL, **kw):
+    return ctk.CTkButton(parent, text=text, command=command,
+                         fg_color=ACCENT, hover_color=ACCENT_HI,
+                         text_color=ON_ACCENT, font=F.btn,
+                         corner_radius=R_CTRL, height=height,
+                         border_width=0, **kw)
+
+
+def secondary_button(parent, text, command, height=H_CTRL, **kw):
+    return ctk.CTkButton(parent, text=text, command=command,
+                         fg_color=RAISED, hover_color=HOVER,
+                         text_color=TEXT, font=F.btn,
+                         corner_radius=R_CTRL, height=height,
+                         border_width=BORDER_W, border_color=LINE, **kw)
+
+
+def ghost_button(parent, text, command, size=26, **kw):
+    return ctk.CTkButton(parent, text=text, command=command,
+                         fg_color="transparent", hover_color=HOVER,
+                         text_color=FAINT, font=F.body,
+                         corner_radius=R_CTRL,
+                         width=size, height=size, **kw)
+
+
+def form_label(parent, text, row):
+    lbl = ctk.CTkLabel(parent, text=text, font=F.body,
+                       text_color=DIM, anchor="w", width=LABEL_COL)
+    lbl.grid(row=row, column=0, sticky="w", pady=(0, S_SM))
+    return lbl
+
+
+def hint(parent, text):
+    return ctk.CTkLabel(parent, text=text, font=F.small,
+                        text_color=FAINT, anchor="w", justify="left")
 
 
 # ─────────────────────────────────────────────
@@ -208,19 +326,24 @@ else:
 class WebPConverterApp(_AppBase):
     def __init__(self):
         super().__init__()
+        init_fonts()
 
-        ctk.set_appearance_mode("Dark")
-        ctk.set_default_color_theme("blue")
-        self.configure(bg=BG)
-
-        self.title(f"WebP → Video Converter  v{APP_VERSION}")
         self._settings = load_settings()
+        theme = self._settings.get("theme", "dark")
+        self._theme = theme if theme in VALID_THEMES else "dark"
+        ctk.set_appearance_mode(self._theme)
+        ctk.set_default_color_theme("blue")
+        self.configure(fg_color=BG)
+
+        self.title(f"WebP → Video  ·  v{APP_VERSION}")
+        # The layout has a hard minimum height; never open taller than the display.
+        avail_h = max(600, self.winfo_screenheight() - 80)
         geo = self._settings.get("geometry", "")
         if isinstance(geo, str) and re.fullmatch(r"\d{3,5}x\d{3,5}([+-]\d+){2}", geo):
             self.geometry(geo)
         else:
-            self.geometry("1000x740")
-        self.minsize(860, 600)
+            self.geometry(f"1160x{min(890, avail_h)}")
+        self.minsize(1040, min(865, avail_h))
         self.resizable(True, True)
 
         self._set_app_icon()
@@ -242,6 +365,7 @@ class WebPConverterApp(_AppBase):
         # Per-file metadata cache: path -> {size_mb, frames, w, h, total_ms}
         self.file_meta:        dict[str, dict] = {}
         self.file_meta_labels: dict[str, ctk.CTkLabel] = {}
+        self.file_name_labels: dict[str, ctk.CTkLabel] = {}
 
         # Settings vars
         self.output_format     = ctk.StringVar(value=".mp4")
@@ -250,6 +374,7 @@ class WebPConverterApp(_AppBase):
         self.use_source_timing = ctk.BooleanVar(value=True)
         self.resolution_preset = ctk.StringVar(value="Same Resolution")
         self.crf_value         = ctk.IntVar(value=22)
+        self._timing_mode      = ctk.StringVar(value="Original")
 
         # Preview state
         self.preview_frames:   list = []   # list of (CTkImage, delay_ms)
@@ -263,7 +388,8 @@ class WebPConverterApp(_AppBase):
 
         self._build_layout()
         self.load_previous_settings()
-        self.after(100, self._force_left_render)
+        self.update_files_list()
+        self.after(100, self._force_queue_render)
         self._setup_dnd()
 
         # Keyboard shortcuts
@@ -297,14 +423,15 @@ class WebPConverterApp(_AppBase):
             self.TkdndVersion = TkinterDnD._require(self)
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._on_drop)
-            self.dnd_bind("<<DropEnter>>", lambda _e: self._set_status("DROP FILES", ACCENT))
-            self.dnd_bind("<<DropLeave>>", lambda _e: self._restore_status())
+            self.dnd_bind("<<DropEnter>>", lambda _e: self._set_drop_active(True))
+            self.dnd_bind("<<DropLeave>>", lambda _e: self._set_drop_active(False))
         except Exception:
             pass
 
-    def _force_left_render(self):
+    def _force_queue_render(self):
+        """CTkScrollableFrame can defer first paint until it is scrolled once."""
         try:
-            canvas = self._left_scroll._parent_canvas
+            canvas = self.files_list_frame._parent_canvas
             canvas.yview_scroll(1, "units")
             canvas.yview_scroll(-1, "units")
         except AttributeError:
@@ -313,277 +440,293 @@ class WebPConverterApp(_AppBase):
     # ── Layout skeleton ──────────────────────
 
     def _build_layout(self):
-        # ── Title bar ──
-        title_bar = ctk.CTkFrame(self, fg_color=CARD, corner_radius=0, height=56)
-        title_bar.pack(fill="x", side="top")
-        title_bar.pack_propagate(False)
+        self._build_header()
+        self._build_footer()
 
-        ctk.CTkLabel(
-            title_bar,
-            text="  ⬡  WebP → Video",
-            font=FONT_TITLE,
-            text_color=TEXT,
-        ).pack(side="left", padx=(20, 6), pady=10)
-
-        ctk.CTkLabel(
-            title_bar, text=f"v{APP_VERSION}",
-            font=FONT_MONO, text_color=TEXT_DIM,
-        ).pack(side="left", pady=(18, 6))
-
-        self.status_dot = ctk.CTkLabel(
-            title_bar, text="● READY",
-            font=(_FONT_MONO, 11, "bold"),
-            text_color=ACCENT,
-        )
-        self.status_dot.pack(side="right", padx=20)
-        self._status_current = ("READY", ACCENT)
-
-        # ── Body: two columns ──
-        body = ctk.CTkFrame(self, fg_color=BG)
-        body.pack(fill="both", expand=True, padx=16, pady=12)
-        body.columnconfigure(0, weight=1, minsize=340)
-        body.columnconfigure(1, weight=1, minsize=380)
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(side="top", fill="both", expand=True, padx=S_MD, pady=S_MD)
+        body.columnconfigure(0, weight=4, minsize=320)
+        body.columnconfigure(1, weight=6, minsize=430)
         body.rowconfigure(0, weight=1)
 
-        left_scroll = ctk.CTkScrollableFrame(
-            body, fg_color=BG,
-            scrollbar_button_color=CARD2,
-            scrollbar_button_hover_color=BORDER,
-            corner_radius=0,
-        )
-        left_scroll.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self._left_scroll = left_scroll
+        left = ctk.CTkFrame(body, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, GAP // 2))
+        left.rowconfigure(0, weight=1)
+        left.columnconfigure(0, weight=1)
 
-        right = ctk.CTkFrame(body, fg_color=BG)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(1, weight=1)
+        right = ctk.CTkFrame(body, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew", padx=(GAP // 2, 0))
         right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1, minsize=PREVIEW_H + 80)  # preview grows
+        right.rowconfigure(1, weight=0)   # settings are intrinsic height
 
-        self._build_settings(left_scroll)
-        self._build_preview(right)
+        self._build_source(left)
+        self._build_output(right)
 
-    # ── Left: settings ───────────────────────
+    # ── Chrome: header ───────────────────────
 
-    def _build_settings(self, parent):
-        # FILES card
-        files_card = section_card(parent, "FILES")
-        files_card.pack(fill="x", pady=(0, 10))
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0, height=58)
+        bar.pack(side="top", fill="x")
+        bar.pack_propagate(False)
+        ctk.CTkFrame(self, height=BORDER_W, fg_color=LINE,
+                     corner_radius=0).pack(side="top", fill="x")
 
-        self.add_files_btn = ctk.CTkButton(
-            files_card, text="＋  Add WebP Files",
-            command=self.select_webps,
-            fg_color=ACCENT, hover_color=ACCENT_DIM,
-            text_color="#000000", font=FONT_BTN,
-            corner_radius=8, height=36,
-        )
-        self.add_files_btn.pack(fill="x", padx=16, pady=(10, 6))
+        ctk.CTkLabel(bar, text="◆", font=F.brand,
+                     text_color=ACCENT_TX).pack(side="left", padx=(S_LG, S_SM))
+        ctk.CTkLabel(bar, text="WebP → Video", font=F.brand,
+                     text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(bar, text=f"v{APP_VERSION}", font=F.mono,
+                     text_color=FAINT).pack(side="left", padx=(S_MD, 0))
 
-        btn_row = ctk.CTkFrame(files_card, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(0, 6))
+        self.theme_btn = ghost_button(
+            bar, "☾" if self._theme == "dark" else "☀",
+            self._toggle_theme, size=H_MINI)
+        self.theme_btn.configure(text_color=DIM)
+        self.theme_btn.pack(side="right", padx=(S_SM, S_LG))
 
-        self.add_folder_btn = ctk.CTkButton(
-            btn_row, text="🗂  Add Folder",
-            command=self.select_folder_of_webps,
-            fg_color=CARD2, hover_color=HOVER_BG,
-            text_color=TEXT, font=FONT_BTN,
-            border_width=1, border_color=BORDER,
-            corner_radius=8, height=36,
-        )
-        self.add_folder_btn.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        self.status_text = ctk.CTkLabel(bar, text="Ready", font=F.body,
+                                        text_color=DIM)
+        self.status_text.pack(side="right", padx=(0, S_MD))
+        self.status_dot = ctk.CTkLabel(bar, text="●", font=F.small,
+                                       text_color=DIM)
+        self.status_dot.pack(side="right", padx=(0, S_SM))
+        self._status_current = ("Ready", DIM)
 
-        self.output_folder_btn = ctk.CTkButton(
-            btn_row, text="📁  Output Folder",
-            command=self.select_output_folder,
-            fg_color=CARD2, hover_color=HOVER_BG,
-            text_color=TEXT, font=FONT_BTN,
-            border_width=1, border_color=BORDER,
-            corner_radius=8, height=36,
-        )
-        self.output_folder_btn.pack(side="left", expand=True, fill="x")
+    # ── Chrome: footer ───────────────────────
 
+    def _build_footer(self):
+        bar = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0)
+        bar.pack(side="bottom", fill="x")
+        ctk.CTkFrame(self, height=BORDER_W, fg_color=LINE,
+                     corner_radius=0).pack(side="bottom", fill="x")
+
+        row = ctk.CTkFrame(bar, fg_color="transparent")
+        row.pack(fill="x", padx=S_LG, pady=(S_MD, S_SM))
+
+        self.convert_btn = primary_button(
+            row, "▶   Convert", self.start_conversion, height=H_CTA, width=190)
+        self.convert_btn.pack(side="right")
+
+        self.output_folder_btn = secondary_button(
+            row, "Change", self.select_output_folder, height=H_MINI, width=76)
+        self.output_folder_btn.pack(side="right", padx=(S_MD, S_MD))
+
+        ctk.CTkLabel(row, text="Output", font=F.body,
+                     text_color=DIM).pack(side="left")
         self.output_folder_label = ctk.CTkLabel(
-            files_card,
-            text=f"→  {self.output_folder}",
-            font=FONT_MONO, text_color=TEXT_DIM,
-            anchor="w", wraplength=290, justify="left",
-            cursor="hand2",
-        )
-        self.output_folder_label.pack(fill="x", padx=16, pady=(0, 12))
-        self.output_folder_label.bind("<Button-1>", lambda _e: self.open_output_folder())
-
-        # FORMAT & RESOLUTION card
-        fmt_card = section_card(parent, "FORMAT  &  RESOLUTION")
-        fmt_card.pack(fill="x", pady=(0, 10))
-
-        ctk.CTkLabel(fmt_card, text="Container", font=FONT_SMALL,
-                     text_color=TEXT_DIM, anchor="w").pack(fill="x", padx=16, pady=(10, 2))
-
-        self.format_seg = ctk.CTkSegmentedButton(
-            fmt_card, values=list(VALID_FORMATS),
-            variable=self.output_format,
-            fg_color=CARD2,
-            selected_color=ACCENT, selected_hover_color=ACCENT_DIM,
-            unselected_color=CARD2, unselected_hover_color=HOVER_BG,
-            text_color=TEXT, font=FONT_BODY,
-            corner_radius=8, height=32,
-        )
-        self.format_seg.pack(fill="x", padx=16)
-
-        ctk.CTkLabel(fmt_card, text="Resolution", font=FONT_SMALL,
-                     text_color=TEXT_DIM, anchor="w").pack(fill="x", padx=16, pady=(10, 2))
-
-        self.res_menu = ctk.CTkOptionMenu(
-            fmt_card,
-            values=list(VALID_RESOLUTIONS),
-            variable=self.resolution_preset,
-            command=self.toggle_custom_res_entry,
-            fg_color=CARD2, button_color=ACCENT, button_hover_color=ACCENT_DIM,
-            text_color=TEXT, font=FONT_BODY, dropdown_fg_color=CARD2,
-            corner_radius=8,
-        )
-        self.res_menu.pack(fill="x", padx=16)
-
-        self._res_hint = ctk.CTkLabel(
-            fmt_card, text="Presets keep aspect ratio (fit inside box)",
-            font=FONT_SMALL, text_color=TEXT_MUTED, anchor="w",
-        )
-        self._res_hint.pack(fill="x", padx=16, pady=(2, 0))
-
-        # Bottom padding for fmt_card when custom row is hidden
-        self._fmt_card_pad = ctk.CTkFrame(fmt_card, fg_color="transparent", height=14)
-        self._fmt_card_pad.pack(fill="x")
-
-        # Custom resolution row (initially hidden)
-        self.custom_res_row = ctk.CTkFrame(fmt_card, fg_color="transparent")
-
-        self.custom_res_width = ctk.CTkEntry(
-            self.custom_res_row, width=90, placeholder_text="Width",
-            fg_color=CARD2, border_color=BORDER,
-            placeholder_text_color=TEXT_DIM, text_color=TEXT, corner_radius=8,
-        )
-        self.custom_res_width.pack(side="left")
-
-        ctk.CTkLabel(self.custom_res_row, text=" × ", font=FONT_BODY,
-                     text_color=TEXT_DIM).pack(side="left")
-
-        self.custom_res_height = ctk.CTkEntry(
-            self.custom_res_row, width=90, placeholder_text="Height",
-            fg_color=CARD2, border_color=BORDER,
-            placeholder_text_color=TEXT_DIM, text_color=TEXT, corner_radius=8,
-        )
-        self.custom_res_height.pack(side="left")
-
-        ctk.CTkLabel(
-            self.custom_res_row, text="  px (exact, may stretch)",
-            font=FONT_SMALL, text_color=TEXT_MUTED,
-        ).pack(side="left")
-
-        # ENCODING card
-        enc_card = section_card(parent, "ENCODING")
-        enc_card.pack(fill="x", pady=(0, 10))
-
-        self.timing_check = ctk.CTkCheckBox(
-            enc_card,
-            text="Use original frame timing",
-            variable=self.use_source_timing,
-            command=self._on_timing_toggle,
-            text_color=TEXT, font=FONT_BODY,
-            checkmark_color="#000000",
-            fg_color=ACCENT, hover_color=ACCENT_DIM,
-            border_color=BORDER, corner_radius=4,
-        )
-        self.timing_check.pack(anchor="w", padx=16, pady=(12, 0))
-
-        ctk.CTkLabel(
-            enc_card, text="Keeps each frame's real duration · FPS below is fallback",
-            font=FONT_SMALL, text_color=TEXT_MUTED,
-        ).pack(anchor="w", padx=16, pady=(0, 0))
-
-        self.fps_slider = self._slider_row(
-            enc_card, label="Frames Per Second", suffix="FPS",
-            var=self.fps_value, from_=1, to=60, steps=59, attr="fps_label",
-        )
-        self.crf_slider = self._slider_row(
-            enc_card, label="Compression  (CRF)", suffix="CRF",
-            var=self.crf_value, from_=18, to=30, steps=12, attr="crf_label",
-            hint="18 = best quality   ·   30 = smaller file",
-        )
-
-        self.combine_check = ctk.CTkCheckBox(
-            enc_card,
-            text="Combine all files into one output",
-            variable=self.combine_videos,
-            text_color=TEXT, font=FONT_BODY,
-            checkmark_color="#000000",
-            fg_color=ACCENT, hover_color=ACCENT_DIM,
-            border_color=BORDER, corner_radius=4,
-        )
-        self.combine_check.pack(anchor="w", padx=16, pady=(10, 14))
-
-        # CONVERT card
-        conv_card = section_card(parent, "CONVERT")
-        conv_card.pack(fill="x", pady=(0, 10))
-
-        self.convert_btn = ctk.CTkButton(
-            conv_card,
-            text="▶   START CONVERSION",
-            command=self.start_conversion,
-            fg_color=ACCENT, hover_color=ACCENT_DIM,
-            text_color="#000000",
-            font=(_FONT_SANS, 15, "bold"),
-            corner_radius=8, height=46,
-        )
-        self.convert_btn.pack(fill="x", padx=16, pady=(10, 10))
+            row, text="", font=F.mono, text_color=ACCENT_TX,
+            anchor="w", cursor="hand2")
+        self.output_folder_label.pack(side="left", padx=(S_MD, 0))
+        self.output_folder_label.bind("<Button-1>",
+                                      lambda _e: self.open_output_folder())
 
         self.progress_bar = ctk.CTkProgressBar(
-            conv_card,
-            fg_color=CARD2, progress_color=ACCENT,
-            corner_radius=4, height=6,
-        )
-        self.progress_bar.pack(fill="x", padx=16, pady=(0, 6))
-        self.progress_bar.set(0)
+            bar, fg_color=RAISED, progress_color=ACCENT,
+            corner_radius=R_PILL, height=H_BAR)
+        self.progress_bar.pack(fill="x", padx=S_LG, pady=(0, S_SM))
+        self._apply_progress(0)
 
         self.progress_text = ctk.CTkLabel(
-            conv_card, text="Ctrl+Enter to start", font=FONT_MONO,
-            text_color=TEXT_DIM, anchor="w",
-        )
-        self.progress_text.pack(fill="x", padx=16, pady=(0, 14))
+            bar, text="Ctrl+Enter to start", font=F.mono,
+            text_color=FAINT, anchor="w")
+        self.progress_text.pack(fill="x", padx=S_LG, pady=(0, S_MD))
+
+    # ── Left column: source ──────────────────
+
+    def _build_source(self, parent):
+        card, head, body = panel(parent, "Source", pad_x=S_MD)
+        card.grid(row=0, column=0, sticky="nsew")
+
+        self.queue_count_label = ctk.CTkLabel(head, text="", font=F.mono,
+                                              text_color=FAINT)
+        self.queue_count_label.pack(side="right")
+
+        # Drop zone — click adds files, drag-over tints it
+        self.drop_zone = ctk.CTkFrame(
+            body, fg_color=RAISED, corner_radius=R_CTRL,
+            border_width=BORDER_W, border_color=LINE, height=96)
+        self.drop_zone.pack(fill="x", padx=S_XS)
+        self.drop_zone.pack_propagate(False)
+
+        inner = ctk.CTkFrame(self.drop_zone, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        self.drop_glyph = ctk.CTkLabel(inner, text="+", font=F.glyph,
+                                       text_color=ACCENT_TX)
+        self.drop_glyph.pack()
+        self.drop_title = ctk.CTkLabel(
+            inner,
+            text="Drop .webp files here" if _HAS_DND else "Add .webp files",
+            font=F.body_b, text_color=TEXT)
+        self.drop_title.pack()
+        self.drop_hint = ctk.CTkLabel(inner, text="or click to browse  ·  Ctrl+O",
+                                      font=F.small, text_color=FAINT)
+        self.drop_hint.pack()
+
+        for w in (self.drop_zone, inner, self.drop_glyph,
+                  self.drop_title, self.drop_hint):
+            w.configure(cursor="hand2")
+            w.bind("<Button-1>", lambda _e: self.select_webps())
+            w.bind("<Enter>", lambda _e: self._hover_drop(True))
+            w.bind("<Leave>", lambda _e: self._hover_drop(False))
+
+        # Queue
+        self.files_list_frame = ctk.CTkScrollableFrame(
+            body, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=LINE,
+            scrollbar_button_hover_color=FAINT)
+        self.files_list_frame.pack(fill="both", expand=True, pady=(S_MD, 0))
+
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.pack(fill="x", padx=S_XS, pady=(S_MD, 0))
+
+        self.add_folder_btn = secondary_button(
+            actions, "Add folder", self.select_folder_of_webps, height=H_MINI)
+        self.add_folder_btn.pack(side="left", expand=True, fill="x",
+                                 padx=(0, S_SM))
+
+        self.clear_all_btn = secondary_button(
+            actions, "Clear all", self.clear_file_list, height=H_MINI)
+        self.clear_all_btn.pack(side="left", expand=True, fill="x")
+
+    def _hover_drop(self, on: bool):
+        if self._converting:
+            return
+        self.drop_zone.configure(border_color=ACCENT if on else LINE)
+
+    def _set_drop_active(self, on: bool):
+        self.drop_zone.configure(
+            fg_color=DROP_TINT if on else RAISED,
+            border_color=ACCENT if on else LINE)
+
+    # ── Right column: preview + output ───────
+
+    def _build_output(self, parent):
+        prev_card, _, prev_body = panel(parent, "Preview")
+        prev_card.grid(row=0, column=0, sticky="nsew", pady=(0, GAP))
+
+        self.preview_label = ctk.CTkLabel(
+            prev_body, text="Select a file to preview",
+            font=F.small, text_color=FAINT,
+            width=PREVIEW_W, height=PREVIEW_H,
+            corner_radius=R_CTRL, fg_color=RAISED)
+        self.preview_label.pack(expand=True)
+        self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
+
+        self.preview_info = ctk.CTkLabel(prev_body, text="", font=F.mono,
+                                         text_color=FAINT)
+        self.preview_info.pack(pady=(S_MD, 0))
+
+        out_card, _, form = panel(parent, "Output")
+        out_card.grid(row=1, column=0, sticky="nsew")
+        form.columnconfigure(0, weight=0, minsize=LABEL_COL)
+        form.columnconfigure(1, weight=1)
+
+        # Format
+        form_label(form, "Format", 0)
+        self.format_seg = ctk.CTkSegmentedButton(
+            form, values=list(VALID_FORMATS), variable=self.output_format,
+            fg_color=RAISED, selected_color=ACCENT,
+            selected_hover_color=ACCENT_HI,
+            unselected_color=RAISED, unselected_hover_color=HOVER,
+            text_color=TEXT, font=F.body,
+            corner_radius=R_CTRL, height=H_CTRL, border_width=2)
+        self.format_seg.grid(row=0, column=1, sticky="ew", pady=(0, S_SM))
+
+        # Size
+        form_label(form, "Size", 1)
+        self.res_menu = ctk.CTkOptionMenu(
+            form, values=list(VALID_RESOLUTIONS),
+            variable=self.resolution_preset, command=self.toggle_custom_res_entry,
+            fg_color=RAISED, button_color=RAISED, button_hover_color=HOVER,
+            text_color=TEXT, font=F.body,
+            dropdown_fg_color=SURFACE, dropdown_hover_color=HOVER,
+            dropdown_text_color=TEXT, dropdown_font=F.body,
+            corner_radius=R_CTRL, height=H_CTRL)
+        self.res_menu.grid(row=1, column=1, sticky="ew", pady=(0, S_SM))
+
+        self.custom_res_row = ctk.CTkFrame(form, fg_color="transparent")
+        self.custom_res_width = ctk.CTkEntry(
+            self.custom_res_row, width=84, placeholder_text="Width",
+            fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
+            placeholder_text_color=FAINT, text_color=TEXT,
+            font=F.body, corner_radius=R_CTRL, height=H_MINI)
+        self.custom_res_width.pack(side="left")
+        ctk.CTkLabel(self.custom_res_row, text="×", font=F.body,
+                     text_color=FAINT).pack(side="left", padx=S_SM)
+        self.custom_res_height = ctk.CTkEntry(
+            self.custom_res_row, width=84, placeholder_text="Height",
+            fg_color=RAISED, border_color=LINE, border_width=BORDER_W,
+            placeholder_text_color=FAINT, text_color=TEXT,
+            font=F.body, corner_radius=R_CTRL, height=H_MINI)
+        self.custom_res_height.pack(side="left")
+        hint(self.custom_res_row, "px — exact, may stretch").pack(
+            side="left", padx=(S_MD, 0))
+
+        # Quality
+        form_label(form, "Quality", 3)
+        self.crf_slider = self._slider_row(
+            form, row=3, var=self.crf_value, from_=18, to=30, steps=12,
+            suffix="CRF", attr="crf_label")
+        hint(form, "18 lossless-ish  ·  30 smallest file").grid(
+            row=4, column=1, sticky="w", pady=(0, S_MD))
+
+        # Timing
+        form_label(form, "Timing", 5)
+        self.timing_seg = ctk.CTkSegmentedButton(
+            form, values=["Original", "Fixed FPS"], variable=self._timing_mode,
+            command=self._on_timing_mode,
+            fg_color=RAISED, selected_color=ACCENT,
+            selected_hover_color=ACCENT_HI,
+            unselected_color=RAISED, unselected_hover_color=HOVER,
+            text_color=TEXT, font=F.body,
+            corner_radius=R_CTRL, height=H_CTRL, border_width=2)
+        self.timing_seg.grid(row=5, column=1, sticky="ew", pady=(0, S_SM))
+
+        form_label(form, "Rate", 6)
+        self.fps_slider = self._slider_row(
+            form, row=6, var=self.fps_value, from_=1, to=60, steps=59,
+            suffix="FPS", attr="fps_label", pady=(0, S_MD))
+
+        # Combine
+        self.combine_check = ctk.CTkCheckBox(
+            form, text="Combine all files into a single output",
+            variable=self.combine_videos,
+            text_color=TEXT, font=F.body,
+            checkmark_color=ON_ACCENT, fg_color=ACCENT, hover_color=ACCENT_HI,
+            border_color=LINE, border_width=BORDER_W,
+            corner_radius=R_CHECK,
+            checkbox_width=18, checkbox_height=18)
+        self.combine_check.grid(row=8, column=0, columnspan=2, sticky="w")
 
         self._lockable = [
-            self.add_files_btn, self.add_folder_btn, self.output_folder_btn,
-            self.format_seg, self.res_menu,
-            self.fps_slider, self.crf_slider,
-            self.timing_check, self.combine_check,
+            self.add_folder_btn, self.clear_all_btn, self.output_folder_btn,
+            self.format_seg, self.res_menu, self.timing_seg,
+            self.fps_slider, self.crf_slider, self.combine_check,
             self.custom_res_width, self.custom_res_height,
         ]
 
-    def _slider_row(self, parent, label, suffix, var, from_, to, steps,
-                    attr, hint=""):
-        row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=16, pady=(10, 0))
+    def _slider_row(self, parent, row, var, from_, to, steps, suffix, attr,
+                    pady=(0, S_SM)):
+        holder = ctk.CTkFrame(parent, fg_color="transparent")
+        holder.grid(row=row, column=1, sticky="ew", pady=pady)
 
-        ctk.CTkLabel(row, text=label, font=FONT_LABEL, text_color=TEXT).pack(side="left")
-        val_lbl = ctk.CTkLabel(
-            row, text=f"{var.get()} {suffix}",
-            font=(_FONT_MONO, 12, "bold"), text_color=ACCENT,
-        )
+        val_lbl = ctk.CTkLabel(holder, text=f"{var.get()} {suffix}",
+                               font=F.mono_b, text_color=ACCENT_TX,
+                               width=62, anchor="e")
         val_lbl.pack(side="right")
         setattr(self, attr, val_lbl)
 
         slider = ctk.CTkSlider(
-            parent, from_=from_, to=to, number_of_steps=steps, variable=var,
-            fg_color=CARD2, progress_color=ACCENT,
-            button_color=ACCENT, button_hover_color=ACCENT_DIM,
-        )
-        slider.pack(fill="x", padx=16, pady=(4, 0))
+            holder, from_=from_, to=to, number_of_steps=steps, variable=var,
+            fg_color=LINE, progress_color=ACCENT,
+            button_color=ACCENT, button_hover_color=ACCENT_HI,
+            corner_radius=R_PILL,
+            height=H_SLIDER, border_width=SLIDER_INSET)
+        slider.pack(side="left", fill="x", expand=True, padx=(0, S_MD))
         slider.configure(
             command=lambda v, lbl=val_lbl, sfx=suffix:
-                self._on_slider_change(lbl, sfx, v)
-        )
-
-        if hint:
-            ctk.CTkLabel(parent, text=hint, font=FONT_SMALL,
-                         text_color=TEXT_MUTED).pack(anchor="w", padx=16, pady=(2, 0))
+                self._on_slider_change(lbl, sfx, v))
         return slider
 
     def _on_slider_change(self, lbl, suffix, value):
@@ -591,69 +734,33 @@ class WebPConverterApp(_AppBase):
         if suffix == "FPS":
             self._refresh_meta_labels()
 
+    def _on_timing_mode(self, choice):
+        self.use_source_timing.set(choice == "Original")
+        self._on_timing_toggle()
+
+    @staticmethod
+    def _style_slider(slider, label, enabled: bool):
+        """State and colour move together — a disabled slider must not read as live."""
+        slider.configure(state="normal" if enabled else "disabled",
+                         progress_color=ACCENT if enabled else LINE,
+                         button_color=ACCENT if enabled else FAINT)
+        label.configure(text_color=ACCENT_TX if enabled else FAINT)
+
     def _on_timing_toggle(self):
-        disabled = self.use_source_timing.get()
-        self.fps_slider.configure(state="disabled" if disabled else "normal")
-        self.fps_label.configure(text_color=TEXT_DIM if disabled else ACCENT)
+        self._style_slider(self.fps_slider, self.fps_label,
+                           not self.use_source_timing.get())
         self._refresh_meta_labels()
 
-    # ── Right: preview + queue ───────────────
+    # ── Theme ────────────────────────────────
 
-    def _build_preview(self, parent):
-        prev_card = section_card(parent, "PREVIEW")
-        prev_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-
-        self.preview_label = ctk.CTkLabel(
-            prev_card,
-            text="Select a file to preview",
-            font=FONT_SMALL, text_color=TEXT_MUTED,
-            width=380, height=240,
-        )
-        self.preview_label.pack(padx=16, pady=(10, 2))
-        self.preview_label.bind("<Button-1>", lambda _e: self._toggle_preview())
-
-        self.preview_info = ctk.CTkLabel(
-            prev_card, text="", font=FONT_MONO, text_color=TEXT_DIM,
-        )
-        self.preview_info.pack(padx=16, pady=(0, 10))
-
-        list_card = section_card(parent, "QUEUE")
-        list_card.grid(row=1, column=0, sticky="nsew")
-
-        list_btn_row = ctk.CTkFrame(list_card, fg_color="transparent")
-        list_btn_row.pack(fill="x", padx=16, pady=(10, 8))
-
-        self.clear_all_btn = ctk.CTkButton(
-            list_btn_row, text="🗑  Clear All",
-            command=self.clear_file_list,
-            fg_color=CARD2, hover_color=HOVER_BG,
-            text_color=TEXT, font=FONT_SMALL,
-            border_width=1, border_color=BORDER,
-            corner_radius=6, height=30, width=110,
-        )
-        self.clear_all_btn.pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            list_btn_row, text="📂  Open Folder",
-            command=self.open_output_folder,
-            fg_color=CARD2, hover_color=HOVER_BG,
-            text_color=TEXT, font=FONT_SMALL,
-            border_width=1, border_color=BORDER,
-            corner_radius=6, height=30, width=120,
-        ).pack(side="left")
-
-        self.queue_count_label = ctk.CTkLabel(
-            list_btn_row, text="",
-            font=FONT_SMALL, text_color=TEXT_MUTED,
-        )
-        self.queue_count_label.pack(side="right")
-
-        self.files_list_frame = ctk.CTkScrollableFrame(
-            list_card, fg_color="transparent",
-            scrollbar_button_color=CARD2,
-            scrollbar_button_hover_color=BORDER,
-        )
-        self.files_list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+    def _toggle_theme(self):
+        self._theme = "light" if self._theme == "dark" else "dark"
+        ctk.set_appearance_mode(self._theme)
+        self.theme_btn.configure(text="☾" if self._theme == "dark" else "☀")
+        # The preview checkerboard is a baked PIL image — rebuild it.
+        if self.selected_file:
+            self.show_preview(self.selected_file)
+        self.save_current_settings()
 
     # ── Settings persistence ─────────────────
 
@@ -668,6 +775,7 @@ class WebPConverterApp(_AppBase):
             "custom_w":      self.custom_res_width.get(),
             "custom_h":      self.custom_res_height.get(),
             "output_folder": self.output_folder,
+            "theme":         self._theme,
             "geometry":      self.geometry(),
         })
 
@@ -681,6 +789,7 @@ class WebPConverterApp(_AppBase):
         self.resolution_preset.set(res if res in VALID_RESOLUTIONS else "Same Resolution")
         self.combine_videos.set(bool(s.get("combine", False)))
         self.use_source_timing.set(bool(s.get("source_timing", True)))
+        self._timing_mode.set("Original" if self.use_source_timing.get() else "Fixed FPS")
         folder = s.get("output_folder", os.getcwd())
         self.output_folder = folder if isinstance(folder, str) and os.path.isdir(folder) else os.getcwd()
         for key, entry in (("custom_w", self.custom_res_width),
@@ -697,12 +806,13 @@ class WebPConverterApp(_AppBase):
     # ── UI helpers ───────────────────────────
 
     def _refresh_output_label(self):
-        self.output_folder_label.configure(text=f"→  {self.output_folder}")
+        self.output_folder_label.configure(text=short_path(self.output_folder))
 
-    def _set_status(self, text: str, color: str = ACCENT):
-        self.status_dot.configure(text=f"● {text}", text_color=color)
+    def _set_status(self, text: str, color=DIM):
+        self.status_text.configure(text=text, text_color=color)
+        self.status_dot.configure(text_color=color)
 
-    def _commit_status(self, text: str, color: str = ACCENT):
+    def _commit_status(self, text: str, color=DIM):
         self._status_current = (text, color)
         self._set_status(text, color)
 
@@ -711,11 +821,9 @@ class WebPConverterApp(_AppBase):
 
     def toggle_custom_res_entry(self, choice):
         if choice == "Custom":
-            self._fmt_card_pad.pack_forget()
-            self.custom_res_row.pack(fill="x", padx=16, pady=(10, 14))
+            self.custom_res_row.grid(row=2, column=1, sticky="w", pady=(0, S_SM))
         else:
-            self.custom_res_row.pack_forget()
-            self._fmt_card_pad.pack(fill="x")
+            self.custom_res_row.grid_remove()
 
     def _set_controls_enabled(self, enabled: bool):
         state = "normal" if enabled else "disabled"
@@ -724,9 +832,14 @@ class WebPConverterApp(_AppBase):
                 widget.configure(state=state)
             except (tk.TclError, ValueError):
                 pass
-        self.clear_all_btn.configure(state=state)
+        self.drop_zone.configure(
+            border_color=LINE,
+            fg_color=RAISED if enabled else SURFACE)
+        for slider, label in ((self.crf_slider, self.crf_label),
+                              (self.fps_slider, self.fps_label)):
+            self._style_slider(slider, label, enabled)
         if enabled:
-            self._on_timing_toggle()
+            self._on_timing_toggle()   # re-mutes the rate slider if timing is Original
 
     def _ui(self, fn, *args, **kwargs):
         """Schedule a UI call from any thread; safe across window close."""
@@ -744,6 +857,12 @@ class WebPConverterApp(_AppBase):
         except RuntimeError:
             pass
 
+    def _apply_progress(self, fraction: float):
+        """At zero the rounded cap would still paint a stray dot — hide the fill."""
+        self.progress_bar.set(fraction)
+        self.progress_bar.configure(
+            progress_color=RAISED if fraction <= 0 else ACCENT)
+
     def _ui_progress(self, fraction: float, stage: str = ""):
         fraction = max(0.0, min(1.0, fraction))
         pct = int(fraction * 100)
@@ -752,8 +871,15 @@ class WebPConverterApp(_AppBase):
             return
         self._last_progress = key
         text = f"{stage}  ·  {pct}%" if stage else f"{pct}%"
-        self._ui(self.progress_bar.set, fraction)
+        self._ui(self._apply_progress, fraction)
         self._ui(self.progress_text.configure, text=text)
+
+    def _refresh_convert_btn(self):
+        if self._converting:
+            return
+        n = len(self.webp_files)
+        label = "▶   Convert" if not n else f"▶   Convert {n} file{'s' if n != 1 else ''}"
+        self.convert_btn.configure(text=label)
 
     # ── File selection ───────────────────────
 
@@ -806,7 +932,7 @@ class WebPConverterApp(_AppBase):
             self.show_toast(f"Added {len(added)}, skipped {skipped}", kind="info")
 
     def _on_drop(self, event):
-        self._restore_status()
+        self._set_drop_active(False)
         if self._converting:
             return
         try:
@@ -876,14 +1002,14 @@ class WebPConverterApp(_AppBase):
         if meta is None:
             return "reading…"
         if meta["frames"] == 0:
-            return f"{meta['size_mb']:.1f} MB  ·  unreadable file"
+            return f"{meta['size_mb']:.1f} MB  ·  unreadable"
         fps = max(1, self.fps_value.get())
         if self.use_source_timing.get() and meta["total_ms"] > 0:
             duration = meta["total_ms"] / 1000
         else:
             duration = meta["frames"] / fps
         return (f"{meta['size_mb']:.1f} MB  ·  {meta['w']}×{meta['h']}"
-                f"  ·  {meta['frames']} frames  ·  {duration:.1f}s")
+                f"  ·  {meta['frames']}f  ·  {duration:.1f}s")
 
     def _refresh_meta_labels(self):
         for path, label in self.file_meta_labels.items():
@@ -898,106 +1024,82 @@ class WebPConverterApp(_AppBase):
         self.file_rows = {}
         self.file_status_labels = {}
         self.file_meta_labels = {}
+        self.file_name_labels = {}
 
         count = len(self.webp_files)
-        self.queue_count_label.configure(
-            text=f"{count} file{'s' if count != 1 else ''}" if count else "")
+        self.queue_count_label.configure(text=str(count) if count else "")
+        self._refresh_convert_btn()
 
         if not self.webp_files:
-            hint = ("Drop .webp files here\nor press Ctrl+O"
-                    if _HAS_DND else "No files in queue\nCtrl+O to add")
-            empty = ctk.CTkLabel(
+            ctk.CTkLabel(
                 self.files_list_frame,
-                text=hint,
-                font=FONT_SMALL, text_color=TEXT_MUTED,
-                cursor="hand2",
-            )
-            empty.pack(pady=30)
-            empty.bind("<Button-1>", lambda _e: self.select_webps())
+                text="Queue is empty",
+                font=F.small, text_color=FAINT,
+            ).pack(pady=S_XL)
             return
 
         for idx, file in enumerate(self.webp_files):
             is_selected = file == self.selected_file
-            bg = SELECT_BG if is_selected else CARD2
-            border = ACCENT if is_selected else BORDER
 
             item = ctk.CTkFrame(
-                self.files_list_frame, fg_color=bg, corner_radius=8,
-                border_width=1, border_color=border,
-            )
-            item.pack(fill="x", padx=4, pady=3)
+                self.files_list_frame, fg_color=RAISED, corner_radius=R_CTRL,
+                border_width=BORDER_W,
+                border_color=ACCENT if is_selected else LINE)
+            item.pack(fill="x", pady=(0, S_SM))
             self.file_rows[file] = item
 
-            def on_enter(e, row=item, path=file):
-                if path != self.selected_file:
-                    row.configure(fg_color=HOVER_BG)
+            def on_enter(_e, row=item, path=file):
+                if path != self.selected_file and not self._converting:
+                    row.configure(fg_color=HOVER)
 
-            def on_leave(e, row=item, path=file):
+            def on_leave(_e, row=item, path=file):
                 if path != self.selected_file:
-                    row.configure(fg_color=CARD2)
+                    row.configure(fg_color=RAISED)
 
-            def on_click(e, path=file):
-                self.show_preview(path)
+            def on_click(_e, path=file):
                 self.set_selected_file(path)
+                self.show_preview(path)
 
             left = ctk.CTkFrame(item, fg_color="transparent")
-            left.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
+            left.pack(side="left", fill="both", expand=True,
+                      padx=(S_MD, 0), pady=S_SM)
 
-            ctk.CTkLabel(
-                left, text=Path(file).name,
-                font=FONT_HEAD,
-                text_color=ACCENT if is_selected else TEXT,
-                anchor="w",
-            ).pack(fill="x")
+            name_lbl = ctk.CTkLabel(
+                left, text=Path(file).name, font=F.body_b,
+                text_color=ACCENT_TX if is_selected else TEXT, anchor="w")
+            name_lbl.pack(fill="x")
+            self.file_name_labels[file] = name_lbl
 
-            meta_lbl = ctk.CTkLabel(
-                left, text=self._format_meta(file),
-                font=FONT_MONO, text_color=TEXT_DIM, anchor="w",
-            )
+            meta_lbl = ctk.CTkLabel(left, text=self._format_meta(file),
+                                    font=F.mono, text_color=DIM, anchor="w")
             meta_lbl.pack(fill="x")
             self.file_meta_labels[file] = meta_lbl
 
-            # Per-file status indicator
-            status_lbl = ctk.CTkLabel(
-                item, text="", width=24,
-                font=(_FONT_SANS, 14, "bold"), text_color=TEXT_MUTED,
-            )
-            status_lbl.pack(side="right", padx=(0, 2))
+            remove_btn = ghost_button(item, "✕", lambda i=idx: self.remove_file(i))
+            remove_btn.pack(side="right", padx=(0, S_SM))
+
+            status_lbl = ctk.CTkLabel(item, text="", width=20,
+                                      font=F.body_b, text_color=FAINT)
+            status_lbl.pack(side="right")
             self.file_status_labels[file] = status_lbl
+            self._apply_status_style(status_lbl, self.file_status.get(file, ""))
 
-            status = self.file_status.get(file, "")
-            if status:
-                self._apply_status_style(status_lbl, status)
-
-            remove_btn = ctk.CTkButton(
-                item, text="✕", width=28, height=28,
-                fg_color="transparent", hover_color=RED,
-                text_color=TEXT_DIM, font=FONT_BODY,
-                corner_radius=6,
-                command=lambda i=idx: self.remove_file(i),
-            )
-            remove_btn.pack(side="right", padx=(0, 4), pady=5)
-
-            for w in (item, left):
+            for w in (item, left, name_lbl, meta_lbl, status_lbl):
+                w.configure(cursor="hand2")
                 w.bind("<Enter>", on_enter)
                 w.bind("<Leave>", on_leave)
                 w.bind("<Button-1>", on_click)
-            for child in left.winfo_children():
-                child.bind("<Enter>", on_enter)
-                child.bind("<Leave>", on_leave)
-                child.bind("<Button-1>", on_click)
             remove_btn.bind("<Enter>", on_enter)
             remove_btn.bind("<Leave>", on_leave)
 
     def _apply_status_style(self, label: ctk.CTkLabel, status: str):
-        if status == "converting":
-            label.configure(text="⟳", text_color=AMBER)
-        elif status == "done":
-            label.configure(text="✓", text_color=GREEN)
-        elif status == "error":
-            label.configure(text="✕", text_color=RED)
-        else:
-            label.configure(text="", text_color=TEXT_MUTED)
+        styles = {
+            "converting": ("●", WARN),
+            "done":       ("✓", OK),
+            "error":      ("✕", DANGER),
+        }
+        text, color = styles.get(status, ("", FAINT))
+        label.configure(text=text, text_color=color)
 
     def _update_file_status(self, path: str, status: str):
         self.file_status[path] = status
@@ -1006,22 +1108,28 @@ class WebPConverterApp(_AppBase):
             self._apply_status_style(label, status)
 
     def set_selected_file(self, path: str):
-        if self.selected_file and self.selected_file in self.file_rows:
-            row = self.file_rows[self.selected_file]
+        previous = self.selected_file
+        if previous and previous in self.file_rows:
+            row = self.file_rows[previous]
             if row.winfo_exists():
-                row.configure(fg_color=CARD2, border_color=BORDER)
+                row.configure(fg_color=RAISED, border_color=LINE)
+            name = self.file_name_labels.get(previous)
+            if name and name.winfo_exists():
+                name.configure(text_color=TEXT)
         self.selected_file = path
         if path in self.file_rows:
             row = self.file_rows[path]
             if row.winfo_exists():
-                row.configure(fg_color=SELECT_BG, border_color=ACCENT)
+                row.configure(fg_color=RAISED, border_color=ACCENT)
+            name = self.file_name_labels.get(path)
+            if name and name.winfo_exists():
+                name.configure(text_color=ACCENT_TX)
 
     def _remove_selected(self):
         if self._converting or not self.selected_file:
             return
         if self.selected_file in self.webp_files:
-            idx = self.webp_files.index(self.selected_file)
-            self.remove_file(idx)
+            self.remove_file(self.webp_files.index(self.selected_file))
 
     def remove_file(self, index: int):
         if self._converting:
@@ -1102,7 +1210,7 @@ class WebPConverterApp(_AppBase):
         try:
             frames = []
             with Image.open(filepath) as im:
-                w, h = aspect_fit(im.width, im.height, 380)
+                w, h = fit_box(im.width, im.height, PREVIEW_W, PREVIEW_H)
                 checker = checkerboard((w, h))
                 fallback_ms = int(1000 / max(1, self.fps_value.get()))
                 for i, frame_img in enumerate(ImageSequence.Iterator(im)):
@@ -1142,10 +1250,10 @@ class WebPConverterApp(_AppBase):
             self.preview_info.configure(text="")
             return
         total = sum(d for _, d in self.preview_frames) / 1000
-        state = "▶ playing" if self.preview_running else "▮▮ paused"
-        suffix = f"  (first {MAX_PREVIEW_FRAMES})" if n >= MAX_PREVIEW_FRAMES else ""
+        state = "playing" if self.preview_running else "paused"
+        suffix = f" (first {MAX_PREVIEW_FRAMES})" if n >= MAX_PREVIEW_FRAMES else ""
         self.preview_info.configure(
-            text=f"{n} frames{suffix}  ·  {total:.1f}s  ·  {state} — click image or Space")
+            text=f"{n} frames{suffix}  ·  {total:.1f}s  ·  {state} — click or Space")
 
     def _toggle_preview(self):
         if self.preview_running:
@@ -1190,7 +1298,7 @@ class WebPConverterApp(_AppBase):
                     pass
             self._ui(self.progress_text.configure, text="Cancelling…")
             self._ui(self.convert_btn.configure, state="disabled",
-                     text="⏹   CANCELLING…")
+                     text="■   Cancelling…")
 
     def _validated_settings(self):
         """Build settings dict for the worker; returns None if invalid."""
@@ -1206,7 +1314,7 @@ class WebPConverterApp(_AppBase):
             w_str = self.custom_res_width.get().strip()
             h_str = self.custom_res_height.get().strip()
             if not (w_str.isdigit() and h_str.isdigit()):
-                self.show_toast("Enter numeric width and height for Custom resolution",
+                self.show_toast("Enter numeric width and height for Custom size",
                                 kind="err")
                 return None
             custom_w, custom_h = int(w_str), int(h_str)
@@ -1246,13 +1354,11 @@ class WebPConverterApp(_AppBase):
             self._update_file_status(path, "")
 
         self.convert_btn.configure(
-            text="⏹   CANCEL  (Esc)", command=self._request_cancel,
-            fg_color=RED, hover_color="#e74c3c",
-            text_color=TEXT,
-        )
-        self.progress_bar.set(0)
-        self.progress_text.configure(text="Starting…")
-        self._commit_status("CONVERTING", AMBER)
+            text="■   Cancel  (Esc)", command=self._request_cancel,
+            fg_color=DANGER, hover_color=DANGER_HI, text_color=ON_ACCENT)
+        self._apply_progress(0)
+        self.progress_text.configure(text="Starting…", text_color=DIM)
+        self._commit_status("Converting", WARN)
         self._set_controls_enabled(False)
         self.save_current_settings()
 
@@ -1371,7 +1477,7 @@ class WebPConverterApp(_AppBase):
                     first = failures[0]
                     self._ui(self.progress_text.configure,
                              text=f"{done_count} done, {len(failures)} failed")
-                    self._ui(self._commit_status, "ERROR", RED)
+                    self._ui(self._commit_status, "Error", DANGER)
                     self._ui(self.show_toast,
                              f"{first[0]}: {first[1][:160]}", "err", 6000)
                     if done_count:
@@ -1379,10 +1485,10 @@ class WebPConverterApp(_AppBase):
                                  f"{done_count} file(s) converted, "
                                  f"{len(failures)} failed", "warn", 6000)
                 else:
-                    self._ui(self.progress_bar.set, 1.0)
+                    self._ui(self._apply_progress, 1.0)
                     self._ui(self.progress_text.configure,
-                             text="Done — files saved to output folder")
-                    self._ui(self._commit_status, "DONE", GREEN)
+                             text="Done — files saved to the output folder")
+                    self._ui(self._commit_status, "Done", OK)
                     self._ui(self.show_toast, "Conversion complete — click to open folder",
                              "ok", 5000, self.open_output_folder)
 
@@ -1390,7 +1496,7 @@ class WebPConverterApp(_AppBase):
                 msg = str(e)
                 self._ui(self.show_toast, f"Error: {msg[:200]}", "err", 6000)
                 self._ui(self.progress_text.configure, text=f"Error: {msg[:120]}")
-                self._ui(self._commit_status, "ERROR", RED)
+                self._ui(self._commit_status, "Error", DANGER)
                 for f in files:
                     if self.file_status.get(f) == "converting":
                         self._ui(self._update_file_status, f, "error")
@@ -1403,17 +1509,14 @@ class WebPConverterApp(_AppBase):
 
     def _finish_cancelled(self):
         self._ui(self.progress_text.configure, text="Cancelled")
-        self._ui(self._commit_status, "CANCELLED", AMBER)
+        self._ui(self._commit_status, "Cancelled", WARN)
         self._ui(self.show_toast, "Conversion cancelled", "warn")
 
     def _reset_convert_btn(self):
         self.convert_btn.configure(
-            state="normal",
-            text="▶   START CONVERSION",
-            command=self.start_conversion,
-            fg_color=ACCENT, hover_color=ACCENT_DIM,
-            text_color="#000000",
-        )
+            state="normal", command=self.start_conversion,
+            fg_color=ACCENT, hover_color=ACCENT_HI, text_color=ON_ACCENT)
+        self._refresh_convert_btn()
 
     # ── Frame extraction ─────────────────────
 
@@ -1568,23 +1671,26 @@ class WebPConverterApp(_AppBase):
 
     def show_toast(self, message: str, kind: str = "info",
                    duration: int = 3200, on_click=None):
-        colors = {
-            "info": (CARD2, TEXT),
-            "ok":   (GREEN, "#ffffff"),
-            "warn": (AMBER, "#000000"),
-            "err":  (RED, "#ffffff"),
+        glyphs = {
+            "info": ("●", ACCENT_TX),
+            "ok":   ("✓", OK),
+            "warn": ("!", WARN),
+            "err":  ("✕", DANGER),
         }
-        bg, fg = colors.get(kind, colors["info"])
-        toast = ctk.CTkFrame(self, fg_color=bg, corner_radius=8,
-                             border_width=1, border_color=BORDER)
-        label = ctk.CTkLabel(toast, text=message, font=FONT_HEAD,
-                             text_color=fg, wraplength=360, justify="left")
-        label.pack(padx=18, pady=10)
+        glyph, color = glyphs.get(kind, glyphs["info"])
+
+        toast = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=R_PANEL,
+                             border_width=BORDER_W, border_color=LINE)
+        icon = ctk.CTkLabel(toast, text=glyph, font=F.body_b, text_color=color)
+        icon.pack(side="left", padx=(S_LG, S_MD), pady=S_MD)
+        label = ctk.CTkLabel(toast, text=message, font=F.body,
+                             text_color=TEXT, wraplength=340, justify="left")
+        label.pack(side="left", padx=(0, S_LG), pady=S_MD)
 
         def dismiss(_e=None):
             self._dismiss_toast(toast)
 
-        for w in (toast, label):
+        for w in (toast, icon, label):
             w.configure(cursor="hand2")
             if on_click:
                 w.bind("<Button-1>", lambda _e: (on_click(), dismiss()))
@@ -1607,12 +1713,12 @@ class WebPConverterApp(_AppBase):
         self._place_toasts()
 
     def _place_toasts(self):
-        y = -16
+        y = -S_LG
         for toast in reversed(self._toasts):
             if not toast.winfo_exists():
                 continue
-            toast.place(relx=1.0, rely=1.0, anchor="se", x=-16, y=y)
-            y -= toast.winfo_reqheight() + 8
+            toast.place(relx=1.0, rely=1.0, anchor="se", x=-S_LG, y=y)
+            y -= toast.winfo_reqheight() + S_SM
 
     # ── Window close ─────────────────────────
 

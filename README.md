@@ -15,7 +15,7 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 
 **WebP to Video Converter** is a modern, easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, `.webm`, or `.gif` files.
 
-Built in Python with a dark-themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), direct FFmpeg encoding via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg), and image handling by [Pillow](https://github.com/python-pillow/Pillow). Originally based on [Dunttus' webptomp4](https://github.com/Dunttus/webptomp4).
+Built in Python with a dark/light themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), direct FFmpeg encoding via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg), and image handling by [Pillow](https://github.com/python-pillow/Pillow). Originally based on [Dunttus' webptomp4](https://github.com/Dunttus/webptomp4).
 
 <p align="center">
   <img src="Screenshot.png"/>
@@ -37,7 +37,8 @@ Built in Python with a dark-themed UI using [CustomTkinter](https://github.com/T
 - Per-file status indicators and rich metadata (size, dimensions, frames, duration) in the queue
 - Clean output names (`name.mp4`, `name (1).mp4`, …) — no random suffixes
 - Keyboard shortcuts: `Ctrl+O` add files, `Ctrl+Enter` convert, `Space` pause preview, `Delete` remove, `Escape` cancel
-- Settings and window size persist between sessions
+- Dark and light themes, toggled from the header
+- Settings, theme, and window size persist between sessions
 - Modern dark UI
 - Standalone EXE/binary build via PyInstaller
 - Cross-platform: Windows, macOS, Linux
