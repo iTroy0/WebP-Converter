@@ -18,7 +18,10 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 Built in Python with a dark/light themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), direct FFmpeg encoding via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg), and image handling by [Pillow](https://github.com/python-pillow/Pillow). Originally based on [Dunttus' webptomp4](https://github.com/Dunttus/webptomp4).
 
 <p align="center">
-  <img src="Screenshot.png"/>
+  <img src="Screenshot.png" alt="WebP Converter, dark theme"/>
+</p>
+<p align="center">
+  <img src="Screenshot-light.png" alt="WebP Converter, light theme"/>
 </p>
 
 ---
@@ -32,9 +35,10 @@ Built in Python with a dark/light themed UI using [CustomTkinter](https://github
 - Combine multiple WebP files into a single output — mixed sizes are letterboxed, GIF supported
 - **Drag & drop** files or folders straight into the window
 - Live progress with real encode percentage
-- Animated preview with checkerboard transparency, real timing, and click/Space to pause
+- Animated preview with checkerboard transparency, real timing, a playback bar, and click/Space to pause
+- **Result card** shows the output's file name, size, codec and timing before you convert
 - Cancel running conversions instantly — no partial files left behind
-- Per-file status indicators and rich metadata (size, dimensions, frames, duration) in the queue
+- Queue with thumbnails, per-file status indicators and metadata (size, dimensions, duration)
 - Clean output names (`name.mp4`, `name (1).mp4`, …) — no random suffixes
 - Keyboard shortcuts: `Ctrl+O` add files, `Ctrl+Enter` convert, `Space` pause preview, `Delete` remove, `Escape` cancel
 - Fully keyboard-operable: `Tab` moves between controls with a visible focus ring; arrow keys change choices, sliders, the size menu and the selected file
@@ -136,6 +140,7 @@ The output will be at `dist/WebP Converter`.
 | `install_requirements.bat` | Quick dependency install (Windows) |
 | `app_icon.ico` | Application icon |
 | `tests/` | Test suite: UI behaviour, layout fit, encoding, lossless round-trips |
+| `CHANGELOG.md` | What changed in each release |
 
 ---
 
