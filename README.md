@@ -9,13 +9,15 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
   <img src="https://img.shields.io/github/stars/iTroy0/WebP-Converter?style=social" alt="GitHub Stars">
 </p>
 
+[![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/itroy0)
+
 ---
 
 ## About
 
 **WebP to Video Converter** is a modern, easy-to-use tool for converting animated `.webp` images into high-quality `.mp4`, `.mkv`, `.webm`, or `.gif` files.
 
-Built in Python with a dark/light themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), direct FFmpeg encoding via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg), and image handling by [Pillow](https://github.com/python-pillow/Pillow). Originally based on [Dunttus' webptomp4](https://github.com/Dunttus/webptomp4).
+Built in Python with a dark/light themed UI using [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), direct FFmpeg encoding via [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg), and image handling by [Pillow](https://github.com/python-pillow/Pillow).
 
 <p align="center">
   <img src="Screenshot.png" alt="WebP Converter, dark theme"/>
