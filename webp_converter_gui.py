@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from tkinter import filedialog, messagebox, font as tkfont
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageSequence, ImageTk
+from PIL import Image, ImageDraw, ImageOps, ImageSequence, ImageTk
 import imageio_ffmpeg
 
 try:
@@ -98,6 +98,9 @@ def keeps_alpha(fmt: str, lossless: bool) -> bool:
     return lossless and fmt == ".mkv"
 
 
+CODEC_NAME = {".mp4": "H.264", ".mkv": "H.264", ".webm": "VP9", ".gif": "GIF"}
+LOSSLESS_CODEC_NAME = {".mp4": "H.264", ".mkv": "FFV1", ".webm": "VP9"}
+
 HINT_CUSTOM = "Exact size — may stretch the image"
 
 # Quality hints. Sizes are "much larger" rather than a multiplier: measured
@@ -120,26 +123,26 @@ HINT_LOSSLESS = {
 # ctk.set_appearance_mode() call — no per-widget bookkeeping.
 # ─────────────────────────────────────────────
 
-BG         = ("#F4F4F6", "#0B0B0D")   # preview canvas
-SURFACE    = ("#FFFFFF", "#141417")   # side columns, action bar
-RAISED     = ("#F1F1F4", "#1C1C21")   # controls; row hover
-HOVER      = ("#E8E8EC", "#24242A")   # hover state of RAISED
-LINE       = ("#E3E3E8", "#27272E")   # hairline dividers
-SELECTED   = ("#E7ECFD", "#1C2240")   # selected queue row
+BG         = ("#E9E9EE", "#0B0B0D")   # preview canvas
+SURFACE    = ("#F4F4F7", "#141417")   # side columns, action bar
+RAISED     = ("#FFFFFF", "#1C1C21")   # controls; row hover
+HOVER      = ("#E6E6EC", "#24242A")   # hover state of RAISED
+LINE       = ("#DADAE1", "#27272E")   # hairline dividers
+SELECTED   = ("#DEE5FF", "#1C2240")   # selected queue row
 
 # Segmented controls mark the choice with a neutral thumb, not the accent:
 # accent is kept for the primary action, sliders, the selected file and focus.
-SEG_TRACK  = ("#E9E9EE", "#1C1C21")
+SEG_TRACK  = ("#E3E3EA", "#1C1C21")
 SEG_THUMB  = ("#FFFFFF", "#393943")
-SEG_HOVER  = ("#F3F3F6", "#25252B")
+SEG_HOVER  = ("#ECECF1", "#25252B")
 
 # Text tiers. TEXT and DIM meet 4.5:1 on every surface above; hierarchy
 # between labels and hints comes from size, not from dropping below that.
 # FAINT is only for disabled states, decorative marks and icon glyphs, which
 # need 3:1 — never for text someone has to read (see tests/test_contrast.py).
 TEXT       = ("#16161A", "#ECECF0")   # primary copy
-DIM        = ("#67676F", "#8D8D96")   # labels, hints, metadata
-FAINT      = ("#7E7E88", "#6E6E78")   # disabled, decorative, icon glyphs
+DIM        = ("#5C5C66", "#8D8D96")   # labels, hints, metadata
+FAINT      = ("#7A7A85", "#6E6E78")   # disabled, decorative, icon glyphs
 
 ACCENT     = ("#3355E8", "#4463FA")   # interactive fill; ≥4.8:1 with white
 ACCENT_HI  = ("#2843C4", "#3A55E0")   # accent hover
@@ -152,9 +155,9 @@ WARN       = ("#9A6207", "#D9922B")
 DANGER     = ("#C42B22", "#E85C50")
 DANGER_HI  = ("#A32019", "#C4453A")
 
-DROP_TINT  = ("#EEF1FE", "#171B2E")   # drag-over fill for the drop zone
-CHECK_A    = ("#EDEDF0", "#1E1E23")   # preview transparency checkerboard
-CHECK_B    = ("#E2E2E7", "#17171B")
+DROP_TINT  = ("#E6EBFE", "#171B2E")   # drag-over fill for the drop zone
+CHECK_A    = ("#FFFFFF", "#1E1E23")   # preview transparency checkerboard
+CHECK_B    = ("#ECECF0", "#17171B")
 
 # ── Geometry ───────────────────────────────────
 # Structure (columns, action bar) is square and full-bleed, divided by
@@ -187,6 +190,7 @@ RING = RING_W + RING_GAP
 ROW_GAP = S_SM
 ROW_PAD = (0, ROW_GAP - 2 * RING)
 
+THUMB = 40       # queue thumbnail; rendered at 2x for sharp high-DPI scaling
 LABEL_COL = 74   # width of the form label column
 HINT_WRAP = 264  # narrower than the output control column: hints never widen it
 
@@ -196,8 +200,9 @@ HINT_WRAP = 264  # narrower than the output control column: hints never widen it
 # output keeps its natural width so its controls never stretch on wide windows.
 COL_SOURCE, COL_PREVIEW, COL_OUTPUT = 300, 300, 360
 PREVIEW_MIN = (260, 200)       # requested size of the preview well
+SCRUB_W = 160                  # playback position bar under the preview
 WIN_DEFAULT = (1240, 760)
-WIN_MIN = (1040, 520)          # fits the tallest settings state (see tests)
+WIN_MIN = (1040, 600)          # fits the tallest settings state (see tests)
 
 # ── Typography ─────────────────────────────────
 # Populated by init_fonts() once a Tk root exists — tkfont.families() needs one.
@@ -325,10 +330,11 @@ def unique_output_path(folder: str, stem: str, ext: str) -> str:
     return path
 
 
-def checkerboard(size: tuple, cell: int = 12) -> Image.Image:
-    img = Image.new("RGB", size, tone(CHECK_A))
+def checkerboard(size: tuple, cell: int = 12, colors=None) -> Image.Image:
+    """Transparency checkerboard; colors default to the live theme's pair."""
+    light, dark = colors or (tone(CHECK_A), tone(CHECK_B))
+    img = Image.new("RGB", size, light)
     draw = ImageDraw.Draw(img)
-    dark = tone(CHECK_B)
     for y in range(0, size[1], cell):
         for x in range(0, size[0], cell):
             if (x // cell + y // cell) % 2 == 0:
@@ -343,6 +349,24 @@ def rounded_mask(size: tuple, radius: int) -> Image.Image:
     ImageDraw.Draw(big).rounded_rectangle(
         [0, 0, big.width - 1, big.height - 1], radius=radius * k, fill=255)
     return big.resize(size, Image.LANCZOS)
+
+
+def make_thumbs(img: Image.Image, px: int, radius: int) -> tuple:
+    """Square rounded thumbnails of img for the (light, dark) themes.
+
+    Centre-cropped to fill, over each theme's checkerboard so transparent
+    art stays visible. Returned as a pair so a theme switch needs no rework.
+    """
+    art = ImageOps.fit(img.convert("RGBA"), (px, px), Image.LANCZOS)
+    corners = rounded_mask((px, px), radius)
+    thumbs = []
+    for i in (0, 1):
+        thumb = checkerboard((px, px), cell=max(2, px // 4),
+                             colors=(CHECK_A[i], CHECK_B[i])).convert("RGBA")
+        thumb.paste(art, (0, 0), art)
+        thumb.putalpha(corners)
+        thumbs.append(thumb)
+    return tuple(thumbs)
 
 
 def rgba_to_gif_frame(img: Image.Image) -> Image.Image:
@@ -626,6 +650,8 @@ class WebPConverterApp(_AppBase):
         self.file_meta:        dict[str, dict] = {}
         self.file_meta_labels: dict[str, ctk.CTkLabel] = {}
         self.file_name_labels: dict[str, ctk.CTkLabel] = {}
+        self.file_thumbs:       dict[str, ctk.CTkImage] = {}
+        self.file_thumb_labels: dict[str, ctk.CTkLabel] = {}
 
         # Settings vars
         self.output_format     = ctk.StringVar(value=".mp4")
@@ -922,7 +948,7 @@ class WebPConverterApp(_AppBase):
         self.preview_well = ctk.CTkFrame(
             body, fg_color="transparent", corner_radius=0,
             width=PREVIEW_MIN[0], height=PREVIEW_MIN[1])
-        self.preview_well.pack(fill="both", expand=True)
+        self.preview_well.pack(side="top", fill="both", expand=True)
         self.preview_well.bind("<Configure>", self._on_preview_resize)
         self.preview_well.bind("<Button-1>", lambda _e: self._toggle_preview())
 
@@ -943,7 +969,16 @@ class WebPConverterApp(_AppBase):
         self.preview_info = ctk.CTkLabel(body, text="", font=F.mono,
                                          text_color=DIM, justify="center",
                                          wraplength=PREVIEW_MIN[0], height=1)
-        self.preview_info.pack(fill="x", pady=(S_MD, 0))
+        self.preview_info.pack(side="bottom", fill="x", pady=(S_SM, 0))
+
+        # Playback position. Always packed, so showing it never resizes the
+        # well; with no clip it is painted in the canvas colour.
+        self.preview_bar = ctk.CTkProgressBar(
+            body, fg_color=BG, progress_color=BG, corner_radius=R_PILL,
+            border_width=0, height=3, width=SCRUB_W)
+        self.preview_bar.pack(side="bottom", pady=(S_MD, 0))
+        self.preview_bar.set(0)
+        self._preview_ends: list[float] = []
         return frame
 
     # ── Column 3: output ─────────────────────
@@ -1043,12 +1078,30 @@ class WebPConverterApp(_AppBase):
             variable=self.combine_videos,
             text_color=TEXT, font=F.body,
             checkmark_color=ON_ACCENT, fg_color=ACCENT, hover_color=ACCENT_HI,
-            border_color=LINE, border_width=BORDER_W,
+            border_color=FAINT, border_width=BORDER_W,
             corner_radius=R_CHECK,
             checkbox_width=18, checkbox_height=18))
         ring.grid(row=8, column=0, columnspan=2, sticky="w")
         self._focusable(ring, self.combine_check,
                         {"<space>": self.combine_check.toggle})
+        self.combine_check.configure(command=self._refresh_summary)
+
+        # Result: what Convert will write for the selected file, kept at the
+        # foot of the column so the settings above never move.
+        form.rowconfigure(9, weight=1, minsize=S_MD)
+        card = ctk.CTkFrame(form, fg_color=RAISED, corner_radius=R_PANEL)
+        card.grid(row=10, column=0, columnspan=2, sticky="sew", padx=RING,
+                  pady=(0, RING))
+        ctk.CTkLabel(card, text="Result", font=F.small, text_color=DIM,
+                     height=1, anchor="w").pack(fill="x", padx=S_MD,
+                                                pady=(S_MD - 2, 0))
+        self.summary_title = ctk.CTkLabel(card, text="", font=F.body_b,
+                                          text_color=TEXT, height=1, anchor="w")
+        self.summary_title.pack(fill="x", padx=S_MD, pady=(S_XS, 0))
+        self.summary_detail = ctk.CTkLabel(
+            card, text="", font=F.mono, text_color=DIM, height=1, anchor="w",
+            justify="left", wraplength=COL_OUTPUT - 2 * PAD_X - 2 * S_MD)
+        self.summary_detail.pack(fill="x", padx=S_MD, pady=(S_XS, S_MD))
 
         return out_frame
 
@@ -1078,6 +1131,7 @@ class WebPConverterApp(_AppBase):
     def _on_size_key(self, _event=None):
         if self._size_error_shown:
             self._check_size_fields(quiet_if_empty=True)
+        self._refresh_summary()
 
     def _size_error(self, entry, name: str):
         value = entry.get().strip()
@@ -1176,6 +1230,54 @@ class WebPConverterApp(_AppBase):
         if fmt == ".gif":
             return HINT_GIF
         return HINT_LOSSLESS[fmt] if self.lossless.get() else HINT_COMPRESSED
+
+    def _output_summary(self) -> tuple:
+        """(file name, details) of what Convert would write right now."""
+        files = self.webp_files
+        if not files:
+            return "Nothing queued", "Add files to see what you'll get"
+        combined = self.combine_videos.get() and len(files) > 1
+        source = files[0] if combined else (self.selected_file or files[0])
+        fmt = self.output_format.get()
+        lossless = self.lossless.get() and fmt != ".gif"
+        stem = "combined" if combined else Path(source).stem
+        name = os.path.basename(unique_output_path(self.output_folder, stem, fmt))
+        if len(name) > 38:
+            name = name[:22] + "…" + name[-15:]
+
+        parts = [f"{len(files)} clips"] if combined else []
+        meta = self.file_meta.get(source)
+        if meta is None:
+            parts.append("reading…")
+        elif meta["frames"] == 0:
+            return name, "This file can't be read"
+        else:
+            preset = self.resolution_preset.get()
+            custom = [e.get().strip() for e in (self.custom_res_width,
+                                                self.custom_res_height)]
+            if preset == "Custom" and not all(
+                    v.isdigit() and 2 <= int(v) <= MAX_DIMENSION for v in custom):
+                parts.append("size not set")
+            else:
+                settings = {"resolution": preset}
+                if preset == "Custom":
+                    settings["custom_w"], settings["custom_h"] = map(int, custom)
+                parts.append("{}×{}".format(
+                    *self._target_size(meta["w"], meta["h"], settings)))
+        parts.append(f"{LOSSLESS_CODEC_NAME[fmt]} lossless" if lossless
+                     else CODEC_NAME[fmt])
+        parts.append("original timing" if self.use_source_timing.get()
+                     else f"{max(1, self.fps_value.get())} fps")
+        if keeps_alpha(fmt, lossless):
+            parts.append("keeps transparency")
+        return name, " · ".join(parts)
+
+    def _refresh_summary(self):
+        if not hasattr(self, "summary_title"):
+            return                      # still building the window
+        title, detail = self._output_summary()
+        self.summary_title.configure(text=title)
+        self.summary_detail.configure(text=detail)
 
     def _sync_controls(self):
         """Apply every dependency between controls — the only place that does.
@@ -1374,6 +1476,7 @@ class WebPConverterApp(_AppBase):
 
     def _refresh_output_label(self):
         self.output_folder_label.configure(text=short_path(self.output_folder))
+        self._refresh_summary()
 
     def _set_status(self, text: str, color=DIM):
         self.status_text.configure(text=text, text_color=color)
@@ -1393,6 +1496,7 @@ class WebPConverterApp(_AppBase):
         else:
             self.custom_res_row.grid_remove()
             self._clear_size_errors()      # a hidden field can't show its error
+        self._refresh_summary()
 
     def _set_controls_enabled(self, enabled: bool):
         self._locked = not enabled
@@ -1534,7 +1638,8 @@ class WebPConverterApp(_AppBase):
 
     @staticmethod
     def _read_meta(path: str) -> dict:
-        meta = {"size_mb": 0.0, "frames": 0, "w": 0, "h": 0, "total_ms": 0}
+        meta = {"size_mb": 0.0, "frames": 0, "w": 0, "h": 0, "total_ms": 0,
+                "thumbs": None}
         try:
             meta["size_mb"] = os.path.getsize(path) / (1024 * 1024)
         except OSError:
@@ -1542,6 +1647,7 @@ class WebPConverterApp(_AppBase):
         try:
             with Image.open(path) as im:
                 meta["w"], meta["h"] = im.width, im.height
+                meta["thumbs"] = make_thumbs(im, 2 * THUMB, 2 * (R_CTRL - 2))
                 n = getattr(im, "n_frames", 1)
                 total = 0
                 for i in range(n):
@@ -1557,10 +1663,21 @@ class WebPConverterApp(_AppBase):
     def _apply_meta(self, path: str, meta: dict):
         if path not in self.webp_files:
             return
+        thumbs = meta.pop("thumbs", None)
         self.file_meta[path] = meta
         label = self.file_meta_labels.get(path)
         if label and label.winfo_exists():
             label.configure(text=self._format_meta(path))
+        if thumbs:
+            self.file_thumbs[path] = ctk.CTkImage(
+                light_image=thumbs[0], dark_image=thumbs[1], size=(THUMB, THUMB))
+            self._show_thumb(self.file_thumb_labels.get(path), path)
+        self._refresh_summary()
+
+    def _show_thumb(self, label, path):
+        image = self.file_thumbs.get(path)
+        if image and label and label.winfo_exists():
+            label.configure(image=image, fg_color="transparent")
 
     def _format_meta(self, path: str) -> str:
         meta = self.file_meta.get(path)
@@ -1573,13 +1690,16 @@ class WebPConverterApp(_AppBase):
             duration = meta["total_ms"] / 1000
         else:
             duration = meta["frames"] / fps
+        # Frame count is in the preview's caption; the row keeps what fits
+        # beside a thumbnail at the column's narrowest.
         return (f"{meta['size_mb']:.1f} MB  ·  {meta['w']}×{meta['h']}"
-                f"  ·  {meta['frames']}f  ·  {duration:.1f}s")
+                f"  ·  {duration:.1f}s")
 
     def _refresh_meta_labels(self):
         for path, label in self.file_meta_labels.items():
             if label.winfo_exists():
                 label.configure(text=self._format_meta(path))
+        self._refresh_summary()
 
     # ── File list UI ─────────────────────────
 
@@ -1590,6 +1710,7 @@ class WebPConverterApp(_AppBase):
         self.file_status_labels = {}
         self.file_meta_labels = {}
         self.file_name_labels = {}
+        self.file_thumb_labels = {}
         self.file_remove_btns = {}
 
         count = len(self.webp_files)
@@ -1628,21 +1749,15 @@ class WebPConverterApp(_AppBase):
                 self.set_selected_file(path)
                 self.show_preview(path)
 
-            left = ctk.CTkFrame(item, fg_color="transparent")
-            left.pack(side="left", fill="both", expand=True,
-                      padx=(S_MD, 0), pady=S_SM)
+            # A filled square holds the thumbnail's place until it is read.
+            thumb_lbl = ctk.CTkLabel(item, text="", width=THUMB, height=THUMB,
+                                     fg_color=HOVER, corner_radius=R_CTRL - 2)
+            thumb_lbl.pack(side="left", padx=(S_SM, 0), pady=S_SM)
+            self.file_thumb_labels[file] = thumb_lbl
+            self._show_thumb(thumb_lbl, file)
 
-            name_lbl = ctk.CTkLabel(
-                left, text=Path(file).name, font=F.body_b,
-                text_color=ACCENT_TX if is_selected else TEXT, anchor="w")
-            name_lbl.pack(fill="x")
-            self.file_name_labels[file] = name_lbl
-
-            meta_lbl = ctk.CTkLabel(left, text=self._format_meta(file),
-                                    font=F.mono, text_color=DIM, anchor="w")
-            meta_lbl.pack(fill="x")
-            self.file_meta_labels[file] = meta_lbl
-
+            # Right-hand widgets are packed before the text, so a long name
+            # is clipped rather than pushing the remove button out of the row.
             remove_btn = ghost_button(item, "✕", lambda i=idx: self.remove_file(i))
             remove_btn.configure(state="disabled" if self._locked else "normal")
             remove_btn.pack(side="right", padx=(0, S_SM))
@@ -1655,7 +1770,21 @@ class WebPConverterApp(_AppBase):
             self.file_status_labels[file] = status_lbl
             self._apply_status_style(status_lbl, self.file_status.get(file, ""))
 
-            for w in (item, left, name_lbl, meta_lbl, status_lbl):
+            left = ctk.CTkFrame(item, fg_color="transparent")
+            left.pack(side="left", fill="both", expand=True, padx=(S_MD, 0))
+
+            name_lbl = ctk.CTkLabel(
+                left, text=Path(file).name, font=F.body_b,
+                text_color=ACCENT_TX if is_selected else TEXT, anchor="w")
+            name_lbl.pack(fill="x")
+            self.file_name_labels[file] = name_lbl
+
+            meta_lbl = ctk.CTkLabel(left, text=self._format_meta(file),
+                                    font=F.mono, text_color=DIM, anchor="w")
+            meta_lbl.pack(fill="x")
+            self.file_meta_labels[file] = meta_lbl
+
+            for w in (item, thumb_lbl, left, name_lbl, meta_lbl, status_lbl):
                 w.configure(cursor="hand2")
                 w.bind("<Enter>", on_enter)
                 w.bind("<Leave>", on_leave)
@@ -1697,6 +1826,7 @@ class WebPConverterApp(_AppBase):
             name = self.file_name_labels.get(path)
             if name and name.winfo_exists():
                 name.configure(text_color=ACCENT_TX)
+        self._refresh_summary()
 
     def _remove_selected(self):
         if self._converting or not self.selected_file:
@@ -1711,6 +1841,7 @@ class WebPConverterApp(_AppBase):
             removed = self.webp_files.pop(index)
             self.file_status.pop(removed, None)
             self.file_meta.pop(removed, None)
+            self.file_thumbs.pop(removed, None)
             if self.selected_file == removed:
                 self.selected_file = self.webp_files[0] if self.webp_files else None
             self.update_files_list()
@@ -1726,16 +1857,21 @@ class WebPConverterApp(_AppBase):
         self.selected_file = None
         self.file_status.clear()
         self.file_meta.clear()
+        self.file_thumbs.clear()
         self.update_files_list()
         self._clear_preview()
 
     def _clear_preview(self):
         self._stop_preview()
         self._detach_preview_image()
-        self.preview_frames = []
+        self._reset_preview_frames()
         self.preview_label.configure(image=None, text="Select a file to preview")
         self.preview_info.configure(text="")
         self._set_preview_clickable(False)
+
+    def _reset_preview_frames(self):
+        self.preview_frames = []
+        self.preview_bar.configure(fg_color=BG, progress_color=BG)
 
     def _set_preview_clickable(self, on: bool):
         """Pointer over the whole canvas only while there's a clip to toggle."""
@@ -1808,7 +1944,7 @@ class WebPConverterApp(_AppBase):
         if not keep_current:
             self._stop_preview()
             self._detach_preview_image()
-            self.preview_frames = []
+            self._reset_preview_frames()
             self.preview_label.configure(image=None, text="Loading preview…")
             self.preview_info.configure(text="")
         threading.Thread(
@@ -1848,7 +1984,7 @@ class WebPConverterApp(_AppBase):
             return     # a newer preview superseded this one
         self._stop_preview()
         self._detach_preview_image()
-        self.preview_frames = []
+        self._reset_preview_frames()
         self.preview_label.configure(image=None, text=f"Preview error: {message}")
         self.preview_info.configure(text="")
         self._set_preview_clickable(False)
@@ -1863,6 +1999,12 @@ class WebPConverterApp(_AppBase):
         index = self.preview_index if same_clip else 0
         self._stop_preview()
         self.preview_frames = frames
+        # Where each frame ends, as a fraction of the clip's running time.
+        total, elapsed, self._preview_ends = sum(d for _, d in frames), 0, []
+        for _, delay in frames:
+            elapsed += delay
+            self._preview_ends.append(elapsed / total)
+        self.preview_bar.configure(fg_color=LINE, progress_color=DIM)
         self._show_frame(index)
         self._set_preview_clickable(True)
         self.preview_running = running
@@ -1904,6 +2046,7 @@ class WebPConverterApp(_AppBase):
         img = self.preview_frames[index][0]
         self.preview_label.configure(image=img, text="")
         self.preview_label.image = img
+        self.preview_bar.set(self._preview_ends[index])
 
     def _animate_preview(self):
         """Show the current frame for its own duration, then advance."""

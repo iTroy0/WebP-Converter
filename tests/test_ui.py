@@ -52,6 +52,124 @@ class UITest(AppFixture, unittest.TestCase):
         self.assertEqual(self.app.preview_frames, [])
         self.assertIn("Convert", self.app.convert_btn.cget("text"))
 
+    def test_queue_rows_show_thumbnails(self):
+        app = self.app
+        self.assertTrue(wait_until(app, lambda: self.sample in app.file_thumbs))
+        thumb = app.file_thumbs[self.sample]
+        self.assertIs(app.file_thumb_labels[self.sample].cget("image"), thumb)
+        self.assertEqual(tuple(thumb.cget("size")), (G.THUMB, G.THUMB))
+        # The pixels live in the CTkImage; the metadata cache keeps only facts.
+        self.assertNotIn("thumbs", app.file_meta[self.sample])
+        # Rebuilding the list reuses the cached image instead of re-reading.
+        app.update_files_list()
+        self.assertIs(app.file_thumb_labels[self.sample].cget("image"), thumb)
+        app.clear_file_list()
+        self.assertEqual(app.file_thumbs, {})
+
+    def test_thumbnails_are_square_rounded_and_themed(self):
+        from PIL import Image
+        art = Image.new("RGBA", (120, 40), (0, 0, 0, 0))     # fully transparent
+        light, dark = G.make_thumbs(art, 80, 12)
+        for thumb in (light, dark):
+            self.assertEqual(thumb.size, (80, 80))
+            self.assertEqual(thumb.getpixel((0, 0))[3], 0)       # corner cut
+            self.assertEqual(thumb.getpixel((40, 40))[3], 255)
+        # Transparent art shows each theme's own checkerboard.
+        for i, thumb in enumerate((light, dark)):
+            seen = {thumb.getpixel(xy)[:3] for xy in ((30, 40), (50, 40))}
+            self.assertEqual(seen, {_rgb(G.CHECK_A[i]), _rgb(G.CHECK_B[i])})
+
+    def test_scrubber_tracks_playback_and_hides_without_a_clip(self):
+        app = self.app
+        self.assertEqual(len(app._preview_ends), 6)
+        self.assertAlmostEqual(app._preview_ends[-1], 1.0)
+        app._show_frame(2)
+        self.assertAlmostEqual(app.preview_bar.get(), 0.5)       # 3 of 6 equal frames
+        self.assertEqual(app.preview_bar.cget("progress_color"), G.DIM)
+        app.clear_file_list()
+        self.assertEqual(app.preview_bar.cget("progress_color"), G.BG)
+        self.assertEqual(app.preview_bar.cget("fg_color"), G.BG)
+
+    def test_result_summary_describes_what_convert_writes(self):
+        app = self.app
+
+        def summary():
+            return app.summary_title.cget("text"), app.summary_detail.cget("text")
+
+        try:
+            title, detail = summary()
+            self.assertEqual(title, "sample.mp4")
+            for part in ("64×48", "H.264", "original timing"):
+                self.assertIn(part, detail)
+            self.assertNotIn("transparency", detail)
+
+            self.set_format(".mkv")
+            self.set_quality("Lossless")
+            title, detail = summary()
+            self.assertEqual(title, "sample.mkv")
+            self.assertIn("FFV1 lossless", detail)
+            self.assertIn("keeps transparency", detail)
+
+            self.set_format(".gif")                 # GIF has no lossless mode
+            self.assertIn("GIF", summary()[1])
+            self.assertNotIn("lossless", summary()[1])
+
+            app._timing_mode.set("Fixed FPS")
+            app._on_timing_mode("Fixed FPS")
+            self.assertIn(f"{app.fps_value.get()} fps", summary()[1])
+
+            app.resolution_preset.set("720p")
+            app.toggle_custom_res_entry("720p")
+            self.assertIn("960×720", summary()[1])     # 4:3 fitted into 1280×720
+
+            self._custom("", "")
+            self.assertIn("size not set", summary()[1])
+            app.custom_res_width.insert(0, "300")
+            app.custom_res_height.insert(0, "200")
+            app._on_size_key()
+            self.assertIn("300×200", summary()[1])
+        finally:
+            self._leave_custom()
+            app._timing_mode.set("Original")
+            app._on_timing_mode("Original")
+            self.set_quality("Compressed")
+            self.set_format(".mp4")
+
+        # A name that is taken gets the suffix Convert would give it.
+        taken = os.path.join(app.output_folder, "sample.mp4")
+        open(taken, "w").close()
+        try:
+            app._refresh_summary()
+            self.assertEqual(summary()[0], "sample (1).mp4")
+        finally:
+            os.remove(taken)
+
+        app.clear_file_list()
+        self.assertEqual(summary()[0], "Nothing queued")
+
+    def test_result_summary_names_a_combined_output(self):
+        app = self.app
+        second = make_webp(os.path.join(self.tmp.name, "second.webp"),
+                           size=(32, 32), frames=2)
+        app._add_files([second])
+        self.assertTrue(wait_until(app, lambda: second in app.file_meta))
+        try:
+            app.combine_check.toggle()
+            title, detail = (app.summary_title.cget("text"),
+                             app.summary_detail.cget("text"))
+            self.assertEqual(title, "combined.mp4")
+            self.assertIn("2 clips", detail)
+            self.assertIn("64×48", detail)          # the first file sets the size
+        finally:
+            app.combine_videos.set(False)
+
+    @unittest.skipUnless(G._HAS_DND, "tkinterdnd2 is not installed")
+    def test_window_registers_as_a_drop_target(self):
+        # The tkdnd Tcl package really loaded, and the window accepts files.
+        app = self.app
+        self.assertTrue(app.tk.call("package", "provide", "tkdnd"))
+        self.assertTrue(app.tk.call("bind", app._w, "<<Drop>>"))
+
     def test_empty_queue_swaps_list_for_drop_target(self):
         app = self.app
         app.update_idletasks()
@@ -159,6 +277,7 @@ class UITest(AppFixture, unittest.TestCase):
             entry.delete(0, "end")
             if value:
                 entry.insert(0, value)
+        app.update_idletasks()      # map the row: Tk can't focus an unmapped field
 
     def _leave_custom(self):
         self.app.resolution_preset.set("Same Resolution")
@@ -361,6 +480,7 @@ class UITest(AppFixture, unittest.TestCase):
 
     def _shown_text(self, tip):
         """Show a tooltip as hovering would, and return its text."""
+        pump(self.app, 50)          # settle: a theme switch remaps the window
         tip.show()
         self.assertIsNotNone(tip._tip, "tooltip did not appear")
         label = tip._tip.winfo_children()[0]
@@ -448,12 +568,13 @@ class UITest(AppFixture, unittest.TestCase):
         self.assertLessEqual(app.winfo_reqwidth(), app.winfo_width())
 
     def test_minimum_window_fits_tallest_settings_state(self):
-        # Tallest state: Custom size entries plus the longest lossless hint.
+        # Tallest state: Custom size entries, a two-line lossless hint, and
+        # the two-line result summary that lossless MKV produces.
         app = self.app
         app.resolution_preset.set("Custom")
         app.toggle_custom_res_entry("Custom")
         self.set_quality("Lossless")
-        self.set_format(max(G.HINT_LOSSLESS, key=lambda f: len(G.HINT_LOSSLESS[f])))
+        self.set_format(".mkv")
         app.geometry(f"{G.WIN_MIN[0]}x{G.WIN_MIN[1]}")
         pump(app, 300)
         try:
