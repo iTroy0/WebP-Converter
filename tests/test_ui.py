@@ -55,14 +55,28 @@ class UITest(AppFixture, unittest.TestCase):
     def test_queue_rows_show_thumbnails(self):
         app = self.app
         self.assertTrue(wait_until(app, lambda: self.sample in app.file_thumbs))
-        thumb = app.file_thumbs[self.sample]
-        self.assertIs(app.file_thumb_labels[self.sample].cget("image"), thumb)
-        self.assertEqual(tuple(thumb.cget("size")), (G.THUMB, G.THUMB))
-        # The pixels live in the CTkImage; the metadata cache keeps only facts.
+        light, dark = app.file_thumbs[self.sample]
+
+        def shown():
+            return app.file_thumb_labels[self.sample].cget("image")
+
+        label = app.file_thumb_labels[self.sample]
+        self.assertIs(shown().cget("light_image"), light)
+        self.assertIs(shown().cget("dark_image"), dark)
+        self.assertEqual(tuple(shown().cget("size")), (G.THUMB, G.THUMB))
+        # The slot is the thumbnail's size with or without its image, so the
+        # row's text doesn't move when the image arrives.
+        app.update_idletasks()
+        scale = G.ctk.ScalingTracker.get_widget_scaling(label)
+        self.assertEqual(label.winfo_reqwidth(), round(G.THUMB * scale))
+        # The pixels are cached apart from the metadata, which keeps only facts.
         self.assertNotIn("thumbs", app.file_meta[self.sample])
-        # Rebuilding the list reuses the cached image instead of re-reading.
+        # Rebuilding the list reuses the cached pixels instead of re-reading,
+        # in a new CTkImage: a shared one would keep every old row alive.
+        before = shown()
         app.update_files_list()
-        self.assertIs(app.file_thumb_labels[self.sample].cget("image"), thumb)
+        self.assertIsNot(shown(), before)
+        self.assertIs(shown().cget("light_image"), light)
         app.clear_file_list()
         self.assertEqual(app.file_thumbs, {})
 
@@ -139,13 +153,38 @@ class UITest(AppFixture, unittest.TestCase):
         taken = os.path.join(app.output_folder, "sample.mp4")
         open(taken, "w").close()
         try:
-            app._refresh_summary()
+            app._set_controls_enabled(True)      # as the end of a conversion does
             self.assertEqual(summary()[0], "sample (1).mp4")
         finally:
             os.remove(taken)
+            app._name_cache.clear()
 
         app.clear_file_list()
         self.assertEqual(summary()[0], "Nothing queued")
+
+    def test_odd_digits_in_a_size_field_are_an_error_not_a_crash(self):
+        # "²".isdigit() is True but int("²") raises; the summary runs on
+        # every queue change, so a crash there would break the whole list.
+        app = self.app
+        self._custom("²", "600")
+        try:
+            app._on_size_key()
+            self.assertIn("size not set", app.summary_detail.cget("text"))
+            app.update_files_list()
+            self.assertIn(self.sample, app.file_rows)
+            self.assertIsNone(app._validated_settings())
+            self.assertIn("whole number", app.custom_hint.cget("text"))
+        finally:
+            self._leave_custom()
+
+    def test_still_image_shows_no_playback_bar(self):
+        from PIL import Image
+        app = self.app
+        still = os.path.join(self.tmp.name, "still.webp")
+        Image.new("RGBA", (40, 30), (200, 60, 60, 255)).save(still)
+        app._add_files([still])
+        self.assertTrue(wait_until(app, lambda: len(app.preview_frames) == 1))
+        self.assertEqual(app.preview_bar.cget("progress_color"), G.BG)
 
     def test_result_summary_names_a_combined_output(self):
         app = self.app

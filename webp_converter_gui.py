@@ -275,6 +275,12 @@ def _num(value, default, lo, hi):
     return max(lo, min(hi, int(value)))
 
 
+def is_whole_number(text: str) -> bool:
+    """True for plain ASCII digits — unlike str.isdigit(), which also accepts
+    characters such as "²" that int() then rejects."""
+    return text.isascii() and text.isdigit()
+
+
 def make_even(w: int, h: int) -> tuple:
     return w if w % 2 == 0 else w + 1, h if h % 2 == 0 else h + 1
 
@@ -652,7 +658,7 @@ class WebPConverterApp(_AppBase):
         self.file_meta:        dict[str, dict] = {}
         self.file_meta_labels: dict[str, ctk.CTkLabel] = {}
         self.file_name_labels: dict[str, ctk.CTkLabel] = {}
-        self.file_thumbs:       dict[str, ctk.CTkImage] = {}
+        self.file_thumbs:       dict[str, tuple] = {}   # (light, dark) images
         self.file_thumb_labels: dict[str, ctk.CTkLabel] = {}
 
         # Settings vars
@@ -668,6 +674,9 @@ class WebPConverterApp(_AppBase):
         self._locked           = False      # controls locked during conversion
         self._size_error_shown = False
         self._tips: dict[str, Tooltip] = {}
+        # Output names already checked against the disk: (folder, stem, ext)
+        # -> name. Emptied whenever the folder's contents may have changed.
+        self._name_cache: dict[tuple, str] = {}
         self.file_remove_btns: dict[str, ctk.CTkButton] = {}
 
         # Preview state
@@ -1139,7 +1148,7 @@ class WebPConverterApp(_AppBase):
         value = entry.get().strip()
         if not value:
             return f"Enter a {name.lower()}"
-        if not value.isdigit():
+        if not is_whole_number(value):
             return f"{name} must be a whole number"
         if not 2 <= int(value) <= MAX_DIMENSION:
             return f"{name} must be 2–{MAX_DIMENSION} px"
@@ -1243,7 +1252,10 @@ class WebPConverterApp(_AppBase):
         fmt = self.output_format.get()
         lossless = self.lossless.get() and fmt != ".gif"
         stem = "combined" if combined else Path(source).stem
-        name = os.path.basename(unique_output_path(self.output_folder, stem, fmt))
+        key = (self.output_folder, stem, fmt)
+        if key not in self._name_cache:
+            self._name_cache[key] = os.path.basename(unique_output_path(*key))
+        name = self._name_cache[key]
         if len(name) > 38:
             name = name[:22] + "…" + name[-15:]
 
@@ -1255,15 +1267,15 @@ class WebPConverterApp(_AppBase):
             return name, "This file can't be read"
         else:
             preset = self.resolution_preset.get()
-            custom = [e.get().strip() for e in (self.custom_res_width,
-                                                self.custom_res_height)]
-            if preset == "Custom" and not all(
-                    v.isdigit() and 2 <= int(v) <= MAX_DIMENSION for v in custom):
+            fields = ((self.custom_res_width, "Width"),
+                      (self.custom_res_height, "Height"))
+            if preset == "Custom" and any(self._size_error(e, n) for e, n in fields):
                 parts.append("size not set")
             else:
                 settings = {"resolution": preset}
                 if preset == "Custom":
-                    settings["custom_w"], settings["custom_h"] = map(int, custom)
+                    settings["custom_w"], settings["custom_h"] = (
+                        int(e.get().strip()) for e, _ in fields)
                 parts.append("{}×{}".format(
                     *self._target_size(meta["w"], meta["h"], settings)))
         parts.append(f"{LOSSLESS_CODEC_NAME[fmt]} lossless" if lossless
@@ -1466,7 +1478,7 @@ class WebPConverterApp(_AppBase):
         for key, entry in (("custom_w", self.custom_res_width),
                            ("custom_h", self.custom_res_height)):
             val = s.get(key, "")
-            if isinstance(val, str) and val.isdigit():
+            if isinstance(val, str) and is_whole_number(val):
                 entry.insert(0, val)
         self._refresh_output_label()
         self.fps_label.configure(text=f"{self.fps_value.get()} FPS")
@@ -1478,6 +1490,7 @@ class WebPConverterApp(_AppBase):
 
     def _refresh_output_label(self):
         self.output_folder_label.configure(text=short_path(self.output_folder))
+        self._name_cache.clear()
         self._refresh_summary()
 
     def _set_status(self, text: str, color=DIM):
@@ -1510,6 +1523,7 @@ class WebPConverterApp(_AppBase):
                 pass
         fill = RAISED if enabled else SURFACE
         self.drop_zone.configure(fg_color=fill, border_color=fill)
+        self._name_cache.clear()      # a conversion writes into the folder
         self._sync_controls()
 
     def _ui(self, fn, *args, **kwargs):
@@ -1649,7 +1663,10 @@ class WebPConverterApp(_AppBase):
         try:
             with Image.open(path) as im:
                 meta["w"], meta["h"] = im.width, im.height
-                meta["thumbs"] = make_thumbs(im, 2 * THUMB, 2 * (R_CTRL - 2))
+                try:
+                    meta["thumbs"] = make_thumbs(im, 2 * THUMB, 2 * (R_CTRL - 2))
+                except Exception:
+                    pass             # the row keeps its placeholder
                 n = getattr(im, "n_frames", 1)
                 total = 0
                 for i in range(n):
@@ -1671,15 +1688,17 @@ class WebPConverterApp(_AppBase):
         if label and label.winfo_exists():
             label.configure(text=self._format_meta(path))
         if thumbs:
-            self.file_thumbs[path] = ctk.CTkImage(
-                light_image=thumbs[0], dark_image=thumbs[1], size=(THUMB, THUMB))
+            self.file_thumbs[path] = thumbs
             self._show_thumb(self.file_thumb_labels.get(path), path)
         self._refresh_summary()
 
     def _show_thumb(self, label, path):
-        image = self.file_thumbs.get(path)
-        if image and label and label.winfo_exists():
-            label.configure(image=image, fg_color="transparent")
+        # A fresh CTkImage per row: CTkImage keeps a reference to every label
+        # it is shown on, so a shared one would pin each rebuilt row forever.
+        thumbs = self.file_thumbs.get(path)
+        if thumbs and label and label.winfo_exists():
+            label.configure(fg_color="transparent", image=ctk.CTkImage(
+                light_image=thumbs[0], dark_image=thumbs[1], size=(THUMB, THUMB)))
 
     def _format_meta(self, path: str) -> str:
         meta = self.file_meta.get(path)
@@ -1752,8 +1771,10 @@ class WebPConverterApp(_AppBase):
                 self.show_preview(path)
 
             # A filled square holds the thumbnail's place until it is read.
+            # corner_radius 0: CTkLabel pads its content by the radius, which
+            # would widen the slot once the (already rounded) image arrives.
             thumb_lbl = ctk.CTkLabel(item, text="", width=THUMB, height=THUMB,
-                                     fg_color=HOVER, corner_radius=R_CTRL - 2)
+                                     fg_color=HOVER, corner_radius=0)
             thumb_lbl.pack(side="left", padx=(S_SM, 0), pady=S_SM)
             self.file_thumb_labels[file] = thumb_lbl
             self._show_thumb(thumb_lbl, file)
@@ -2006,7 +2027,10 @@ class WebPConverterApp(_AppBase):
         for _, delay in frames:
             elapsed += delay
             self._preview_ends.append(elapsed / total)
-        self.preview_bar.configure(fg_color=LINE, progress_color=DIM)
+        if len(frames) > 1:         # a still image has no position to show
+            self.preview_bar.configure(fg_color=LINE, progress_color=DIM)
+        else:
+            self.preview_bar.configure(fg_color=BG, progress_color=BG)
         self._show_frame(index)
         self._set_preview_clickable(True)
         self.preview_running = running
