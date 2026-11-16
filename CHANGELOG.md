@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- Choosing Lossless for a lossy WebP — most are — now warns that it only
+  adds size, and suggests Compressed at 18.
+
 ### Changed
 
 - **Video conversion is up to 4× faster and writes no temporary files** when

@@ -119,6 +119,10 @@ HINT_LOSSLESS = {
     ".webm": "Bit-exact, much larger. Many browsers and players can't open "
              "lossless WebM.",
 }
+# A lossy source's pixels already carry its compression artifacts; storing
+# them exactly made a 11 MB clip 67-97 MB, while CRF 18 gave 5.7 MB.
+HINT_LOSSY_SOURCE = ("Your WebP is lossy: lossless adds only size. "
+                     "Compressed at 18 looks the same.")
 
 # ─────────────────────────────────────────────
 # Design tokens
@@ -347,24 +351,35 @@ def letterbox(img: Image.Image, target: tuple, keep_alpha: bool = False) -> Imag
     return canvas
 
 
-def webp_frame_durations(path: str) -> list[int] | None:
-    """Each frame's duration in ms, read from the container without decoding.
-
-    [] for a still image; None when the file isn't a WebP container.
+def webp_frames(path: str) -> list[tuple[int, bool]] | None:
+    """(duration_ms, lossy) for each frame, read from the container without
+    decoding. A still image is one frame lasting 0 ms; None when the file
+    isn't a WebP container.
     """
-    durations = []
+    frames = []
     with open(path, "rb") as f:
         head = f.read(12)
         if head[:4] != b"RIFF" or head[8:] != b"WEBP":
             return None
         while len(chunk := f.read(8)) == 8:
-            size = int.from_bytes(chunk[4:], "little")
-            if chunk[:4] == b"ANMF":
+            kind, size = chunk[:4], int.from_bytes(chunk[4:], "little")
+            end = f.tell() + size + (size & 1)    # chunks are padded to even length
+            if kind == b"ANMF":
                 # Frame header: x, y, width, height (3 bytes each), duration.
-                durations.append(int.from_bytes(f.read(16)[12:15], "little"))
-                size -= 16
-            f.seek(size + (size & 1), 1)      # chunks are padded to even length
-    return durations
+                # The frame's own chunks follow: maybe ALPH, then VP8 or VP8L.
+                duration = int.from_bytes(f.read(16)[12:15], "little")
+                lossy = False
+                while f.tell() < end and len(sub := f.read(8)) == 8:
+                    if sub[:4] in (b"VP8 ", b"VP8L"):
+                        lossy = sub[:4] == b"VP8 "
+                        break
+                    sub_size = int.from_bytes(sub[4:], "little")
+                    f.seek(sub_size + (sub_size & 1), 1)
+                frames.append((duration, lossy))
+            elif kind in (b"VP8 ", b"VP8L"):        # a still image
+                frames.append((0, kind == b"VP8 "))
+            f.seek(end)
+    return frames
 
 
 def stream_rate(files: list, settings: dict) -> str | None:
@@ -375,12 +390,12 @@ def stream_rate(files: list, settings: dict) -> str | None:
     durations = []
     for path in files:
         try:
-            found = webp_frame_durations(path)
+            found = webp_frames(path)
         except OSError:
             return None                       # the decoder reports this file
         if found is None:
             return None
-        durations += found or [0]
+        durations += [ms for ms, _ in found] or [0]
     if not any(durations):
         return str(settings["fps"])           # no timing stored at all
     # A steady rate rounded to whole milliseconds (30 fps is 33, 33, 34 ms)
@@ -1310,7 +1325,16 @@ class WebPConverterApp(_AppBase):
         fmt = self.output_format.get()
         if fmt == ".gif":
             return HINT_GIF
-        return HINT_LOSSLESS[fmt] if self.lossless.get() else HINT_COMPRESSED
+        if not self.lossless.get():
+            return HINT_COMPRESSED
+        if any(self.file_meta.get(p, {}).get("lossy") for p in self.webp_files):
+            return HINT_LOSSY_SOURCE
+        return HINT_LOSSLESS[fmt]
+
+    def _refresh_quality_hint(self):
+        text = self._quality_hint()
+        self.quality_hint.configure(
+            text=text, text_color=WARN if text == HINT_LOSSY_SOURCE else DIM)
 
     def _output_summary(self) -> tuple:
         """(file name, details) of what Convert would write right now."""
@@ -1384,7 +1408,7 @@ class WebPConverterApp(_AppBase):
                            not (locked or gif or lossless))
         self._style_slider(self.fps_slider, self.fps_label,
                            not (locked or self.use_source_timing.get()))
-        self.quality_hint.configure(text=self._quality_hint())
+        self._refresh_quality_hint()
         self._refresh_meta_labels()
 
     # ── Keyboard ─────────────────────────────
@@ -1737,15 +1761,17 @@ class WebPConverterApp(_AppBase):
                     meta["thumbs"] = make_thumbs(im, 2 * THUMB, 2 * (R_CTRL - 2))
                 except Exception:
                     pass             # the row keeps its placeholder
-                durations = webp_frame_durations(path)
-                if durations is None:       # not a WebP container: decode it
-                    durations = []
+                frames = webp_frames(path)
+                if frames is None:          # not a WebP container: decode it
+                    frames = []
                     for i in range(getattr(im, "n_frames", 1)):
                         im.seek(i)
                         im.load()  # duration only populated after load
-                        durations.append(int(im.info.get("duration", 0) or 0))
-                meta["frames"] = len(durations) or 1
-                meta["total_ms"] = sum(durations)
+                        frames.append((int(im.info.get("duration", 0) or 0),
+                                       False))
+                meta["frames"] = len(frames) or 1
+                meta["total_ms"] = sum(ms for ms, _ in frames)
+                meta["lossy"] = any(lossy for _, lossy in frames)
         except Exception:
             pass
         return meta
@@ -1762,6 +1788,7 @@ class WebPConverterApp(_AppBase):
             self.file_thumbs[path] = thumbs
             self._show_thumb(self.file_thumb_labels.get(path), path)
         self._refresh_summary()
+        self._refresh_quality_hint()          # warns once a lossy source is known
         if path == self.selected_file:
             self._update_preview_info()       # its caption shows the frame count
 

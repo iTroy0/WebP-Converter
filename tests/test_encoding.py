@@ -34,15 +34,26 @@ class FrameTimingTest(unittest.TestCase):
                 im.load()
                 decoded.append(im.info["duration"])
         self.assertEqual(decoded, [30, 40, 50, 60, 70, 80])
-        self.assertEqual(G.webp_frame_durations(path), decoded)
+        self.assertEqual([ms for ms, _ in G.webp_frames(path)], decoded)
 
-    def test_still_image_has_no_durations_and_other_formats_are_refused(self):
-        still = os.path.join(self.dir, "still.webp")
-        Image.new("RGB", (8, 8)).save(still)
-        self.assertEqual(G.webp_frame_durations(still), [])
+    def test_lossy_and_lossless_frames_are_told_apart(self):
+        lossless = self.webp("lossless.webp", [40, 40])
+        self.assertEqual(G.webp_frames(lossless), [(40, False), (40, False)])
+        # Lossy with alpha stores an ALPH chunk before each frame's VP8 data.
+        lossy = os.path.join(self.dir, "lossy.webp")
+        images = [Image.new("RGBA", (32, 24), (200, 50, i * 80, 128)) for i in range(2)]
+        images[0].save(lossy, save_all=True, append_images=images[1:],
+                       duration=50, lossless=False, quality=80)
+        self.assertEqual(G.webp_frames(lossy), [(50, True), (50, True)])
+
+    def test_still_image_is_one_untimed_frame_and_other_formats_are_refused(self):
+        for lossless in (False, True):
+            still = os.path.join(self.dir, f"still-{lossless}.webp")
+            Image.new("RGB", (8, 8)).save(still, lossless=lossless)
+            self.assertEqual(G.webp_frames(still), [(0, not lossless)])
         png = os.path.join(self.dir, "not-webp.webp")
         Image.new("RGB", (8, 8)).save(png, "PNG")
-        self.assertIsNone(G.webp_frame_durations(png))
+        self.assertIsNone(G.webp_frames(png))
         self.assertIsNone(G.stream_rate([png], {"source_timing": True, "fps": 16}))
 
     def test_steady_timing_is_one_exact_rate(self):

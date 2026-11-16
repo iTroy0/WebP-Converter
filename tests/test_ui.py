@@ -4,6 +4,8 @@ import shutil
 import unittest
 from types import SimpleNamespace
 
+from PIL import Image
+
 import webp_converter_gui as G
 from tests.support import AppFixture, body_panels, make_webp, pump, wait_until
 
@@ -454,6 +456,39 @@ class UITest(AppFixture, unittest.TestCase):
             self.set_format(".mkv")
             self.assertEqual(self.state(app.quality_seg), "normal")
             self.assertEqual(app.quality_hint.cget("text"), G.HINT_LOSSLESS[".mkv"])
+        finally:
+            self.set_quality("Compressed")
+            self.set_format(".mp4")
+
+    def test_lossless_warns_when_a_source_is_lossy(self):
+        app = self.app
+        lossy = os.path.join(self.tmp.name, "lossy.webp")
+        images = [Image.new("RGB", (64, 48), (i * 60, 90, 160)) for i in range(3)]
+        images[0].save(lossy, save_all=True, append_images=images[1:],
+                       duration=80, lossless=False, quality=80)
+        self.addCleanup(app.clear_file_list)    # setUp re-queues the sample
+        try:
+            self.set_format(".mp4")
+            self.set_quality("Lossless")
+            app.update_idletasks()
+            y_timing = app.timing_seg.winfo_y()
+            app._add_files([lossy])
+            self.assertTrue(wait_until(app, lambda: lossy in app.file_meta))
+            self.assertEqual(app.quality_hint.cget("text"), G.HINT_LOSSY_SOURCE)
+            self.assertEqual(app.quality_hint.cget("text_color"), G.WARN)
+            app.update_idletasks()
+            self.assertEqual(app.timing_seg.winfo_y(), y_timing,
+                             "the warning needs more than the two lines reserved")
+
+            self.set_quality("Compressed")
+            self.assertEqual(app.quality_hint.cget("text"), G.HINT_COMPRESSED)
+            self.assertEqual(app.quality_hint.cget("text_color"), G.DIM)
+
+            # With only the lossless sample left, the usual hint returns.
+            self.set_quality("Lossless")
+            app.remove_file(app.webp_files.index(lossy))
+            self.assertEqual(app.quality_hint.cget("text"), G.HINT_LOSSLESS[".mp4"])
+            self.assertEqual(app.quality_hint.cget("text_color"), G.DIM)
         finally:
             self.set_quality("Compressed")
             self.set_format(".mp4")

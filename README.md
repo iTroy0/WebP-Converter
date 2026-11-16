@@ -63,6 +63,8 @@ Set **Quality → Lossless** to keep every frame bit-for-bit identical to the so
 
 Lossless files are much larger than compressed ones, and many browsers, phones and built-in players can't open them — VLC and mpv can. MKV is the safest choice and the only one that keeps transparency. GIF is limited to 256 colours, so it has no lossless mode.
 
+Most animated WebPs are themselves lossy. Lossless output then keeps their compression artifacts exactly, so it only adds size: an 11 MB lossy clip became 67 MB as lossless MKV and 6 MB at CRF 18, which looks the same. The app says so under Quality when a queued file is lossy.
+
 ---
 
 ## Quick Start (Windows)
