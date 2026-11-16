@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebP to Video Converter</title>
+<meta name="description" content="Convert animated WebP to MP4, WebM or GIF in your browser. Nothing is uploaded.">
+<link rel="icon" href="data:,">
+<script>
+  // A remembered theme is applied before the first paint, so the page never flashes the other one.
+  try {
+    document.documentElement.style.colorScheme = localStorage.getItem('theme') ?? '';
+  } catch {
+    // No storage (private window): the theme follows the system.
+  }
+</script>
+<style>
+  /* Colours match the desktop app's light and dark themes. */
+  :root {
+    color-scheme: light dark;
+    --bg: light-dark(#E9E9EE, #0B0B0D);
+    --surface: light-dark(#F4F4F7, #141417);
+    --raised: light-dark(#FFFFFF, #1C1C21);
+    --hover: light-dark(#E6E6EC, #24242A);
+    --line: light-dark(#DADAE1, #27272E);
+    --selected: light-dark(#DEE5FF, #1C2240);
+    --text: light-dark(#16161A, #ECECF0);
+    --dim: light-dark(#5C5C66, #8D8D96);
+    --accent: light-dark(#3355E8, #4463FA);
+    --accent-hover: light-dark(#2843C4, #3A55E0);
+    --accent-text: light-dark(#2843C4, #8FA2FF);
+    --danger: light-dark(#C42B22, #E85C50);
+    --drop-tint: light-dark(#E6EBFE, #171B2E);
+    --switch-track: light-dark(#E3E3EA, #1C1C21);
+    --switch-thumb: light-dark(#FFFFFF, #393943);
+    --check-a: light-dark(#FFFFFF, #1E1E23);
+    --check-b: light-dark(#ECECF0, #17171B);
+  }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { margin: 0; font-size: 22px; }
+  p { margin: 0; }
+  a { color: var(--accent-text); }
+  fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+  :focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+  /* One column; on a wide screen the preview gets a column of its own, beside the rest. */
+  .layout {
+    display: grid;
+    gap: 16px;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 32px 16px;
+    grid-template-columns: minmax(0, 1fr);    /* never wider than the window, whatever the contents */
+    grid-template-areas: "header" "sources" "preview" "settings" "footer";
+  }
+  header { grid-area: header; }
+  #sources { grid-area: sources; }
+  #preview { grid-area: preview; }
+  #settings { grid-area: settings; }
+  footer { grid-area: footer; }
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  @media (width >= 960px) {
+    .layout {
+      max-width: 1280px;
+      padding: 32px;
+      column-gap: 24px;
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      grid-template-rows: auto auto auto 1fr;      /* the last row takes what the preview needs beyond the left */
+      grid-template-areas: "header preview" "sources preview" "settings preview" "footer preview";
+    }
+    /* The preview fills the window's height and stays in view while a long list scrolls. */
+    #preview {
+      position: sticky;
+      top: 32px;
+      align-self: start;
+      box-sizing: border-box;
+      height: calc(100vh - 64px);
+    }
+    footer { align-self: end; }
+  }
+
+  header .top { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+  header p { margin-top: 8px; color: var(--dim); }
+
+  /* The file input is the whole drop zone: it is invisible but still takes focus. */
+  #drop {
+    display: block;
+    position: relative;
+    padding: 24px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    background: var(--raised);
+    text-align: center;
+    cursor: pointer;
+  }
+  #drop span { color: var(--accent-text); text-decoration: underline; }
+  #drop input { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+  #drop.over { border-color: var(--accent); background: var(--drop-tint); }
+  #drop:has(:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  #drop:has(:disabled) { opacity: .5; cursor: default; }
+
+  #queue { display: grid; gap: 8px; max-height: 50vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
+  #queue:empty { display: none; }
+  /* A click anywhere on a row shows that file in the preview. */
+  #queue li {
+    display: grid;
+    grid-template: "thumb name save remove" "thumb note save remove" / 40px minmax(0, 1fr) auto auto;
+    column-gap: 12px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--raised);
+    cursor: pointer;
+  }
+  #queue li:hover { background: var(--hover); }
+  #queue li.picked { border-color: var(--accent); background: var(--selected); }
+  #queue canvas { grid-area: thumb; width: 40px; height: 40px; border-radius: 5px; background: var(--bg); object-fit: cover; }
+  #queue .name {
+    grid-area: name;
+    justify-self: start;
+    max-width: 100%;
+    height: auto;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    background: none;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: inherit;
+  }
+  #queue .name:hover { background: none; text-decoration: underline; }
+  #queue .note { grid-area: note; overflow: hidden; color: var(--dim); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+  #queue .failed .note { color: var(--danger); }
+  #queue a { grid-area: save; }
+  #queue .remove { grid-area: remove; width: 32px; height: 32px; padding: 0; }
+  #clear { align-self: flex-end; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .options { align-items: end; }
+  .options label { color: var(--dim); font-size: 13px; }
+  .check { display: flex; gap: 8px; align-items: center; height: 40px; }
+  .options .check { color: var(--text); font-size: 15px; }
+  select, button, input[type=number], .button {
+    display: block;
+    box-sizing: border-box;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--raised);
+    color: var(--text);
+    font: inherit;
+  }
+  .button { display: inline-flex; align-items: center; text-decoration: none; }
+  input[type=number] { width: 72px; }
+  button:hover:enabled, .button:hover { background: var(--hover); }
+  #convert { border-color: var(--accent); background: var(--accent); color: #FFFFFF; }
+  #convert:hover:enabled { border-color: var(--accent-hover); background: var(--accent-hover); }
+  :disabled { opacity: .5; }
+  fieldset:disabled { opacity: 1; }     /* a disabled group dims its controls, not itself as well */
+  /* A square button that shows one of its icons, picked by a data attribute. */
+  .icon { display: grid; place-items: center; width: 40px; padding: 0; flex: none; }
+  .icon svg { width: 20px; height: 20px; }
+  #theme[data-next=dark] .sun, #theme[data-next=light] .moon,
+  #play[data-playing=true] .play, #play[data-playing=false] .pause { display: none; }
+
+  /* Preview. data-state is empty (no files), off (Show preview unticked) or on. */
+  #pick { flex: 1; min-width: 0; }
+  .switch { display: flex; padding: 3px; border-radius: 8px; background: var(--switch-track); }
+  .switch label { display: flex; align-items: center; height: 34px; padding: 0 14px; border-radius: 5px; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .switch label:has(:checked) { background: var(--switch-thumb); }
+  .switch label:has(:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  .switch label:has(:disabled) { opacity: .5; cursor: default; }
+  #view { display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; border-radius: 8px; background: var(--bg); }
+  #stage, #video { display: block; max-width: 100%; max-height: 60vh; }
+  /* A see-through picture shows a checkerboard, as in the desktop app. */
+  #stage { background: repeating-conic-gradient(var(--check-a) 0 25%, var(--check-b) 0 50%) 0 0 / 24px 24px; cursor: pointer; }
+  #info { flex: 1; min-width: 0; color: var(--dim); font-size: 13px; }
+  #player { flex-wrap: nowrap; }
+  #seek { flex: 1; min-width: 0; accent-color: var(--accent); }
+  #position { min-width: 9ch; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
+  #placeholder { display: none; color: var(--dim); text-align: center; }
+  #preview:not([data-state=on]) :is(#pick, #switch, #view, #details, #player) { display: none; }
+  #preview[data-state=empty] .head { display: none; }
+  #preview:not([data-state=on]) #placeholder { display: grid; flex: 1; place-items: center; }
+  @media (width < 960px) {
+    #preview[data-state=empty], #preview[data-state=off] #placeholder { display: none; }
+  }
+  @media (width >= 960px) {
+    #view { flex: 1; min-height: 0; container-type: size; }
+    /* As large as the panel allows, in its own shape: --ratio is its width / height. */
+    #stage { width: min(100cqw, 100cqh * var(--ratio, 1)); height: auto; max-width: none; max-height: none; }
+    #video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+  }
+
+  progress { display: block; width: 100%; accent-color: var(--accent); }
+  #status:empty { display: none; }
+
+  footer { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; justify-content: space-between; color: var(--dim); font-size: 13px; }
+  footer p { flex: 1 1 260px; }
+  .coffee {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    height: 40px;
+    padding: 0 16px;
+    border-radius: 8px;
+    background: #FFDD00;
+    color: #16161A;
+    font-size: 15px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .coffee:hover { background: #F2D200; }
+  .coffee svg { width: 20px; height: 20px; }
+</style>
+</head>
+<body>
+<main class="layout">
+  <header>
+    <div class="top">
+      <h1>WebP → Video Converter</h1>
+      <button id="theme" class="icon" type="button">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+        </svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.5 13.5A9 9 0 1 1 10.5 3.5a7.5 7.5 0 0 0 10 10z"/>
+        </svg>
+      </button>
+    </div>
+    <p>Convert animated WebP to MP4, WebM or GIF in your browser. Nothing is uploaded online.</p>
+  </header>
+  <script>
+    // The theme follows the system until this button is used; from then on the choice is
+    // remembered. It runs here, apart from the rest, so that it works before the encoder loads.
+    {
+      const theme = document.getElementById('theme');
+      const dark = matchMedia('(prefers-color-scheme: dark)');
+      const scheme = () => document.documentElement.style.colorScheme || (dark.matches ? 'dark' : 'light');
+      const label = () => {
+        const next = scheme() === 'dark' ? 'light' : 'dark';
+        theme.dataset.next = next;        // which icon shows
+        theme.title = theme.ariaLabel = `Switch to ${next} theme`;
+      };
+      theme.addEventListener('click', () => {
+        const next = scheme() === 'dark' ? 'light' : 'dark';
+        document.documentElement.style.colorScheme = next;
+        try {
+          localStorage.setItem('theme', next);
+        } catch {
+          // No storage (private window): the choice lasts until the page is closed.
+        }
+        label();
+      });
+      dark.addEventListener('change', label);
+      label();
+    }
+  </script>
+
+  <section id="sources" class="card" aria-label="Files">
+    <label id="drop">
+      Drop WebP files here, or <span>choose files</span>
+      <input id="files" type="file" accept=".webp,image/webp" multiple>
+    </label>
+    <ul id="queue" aria-label="Files to convert"></ul>
+    <button id="clear" type="button" hidden>Clear list</button>
+  </section>
+
+  <section id="preview" class="card" aria-label="Preview" data-state="empty">
+    <div class="row head">
+      <label class="check"><input id="preview-on" type="checkbox" checked> Show preview</label>
+      <select id="pick" aria-label="File to preview"></select>
+      <div id="switch" class="switch" role="group" aria-label="Show">
+        <label><input id="original" type="radio" name="show" checked> Original</label>
+        <label><input id="converted" type="radio" name="show"> Converted</label>
+      </div>
+    </div>
+    <p id="placeholder">Add WebP files to preview them here.</p>
+    <div id="view">
+      <canvas id="stage"></canvas>
+      <video id="video" controls autoplay loop muted playsinline hidden></video>
+    </div>
+    <div id="details" class="row">
+      <p id="info"></p>
+      <a id="get" class="button" hidden>Download</a>
+    </div>
+    <div id="player" class="row">
+      <button id="back" class="icon" type="button" aria-label="Previous frame" title="Previous frame">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2.5v14H6zm12.5 0v14L9.5 12z"/></svg>
+      </button>
+      <button id="play" class="icon" type="button" data-playing="true" aria-label="Pause" title="Pause">
+        <svg class="pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5h3.5v14H7zm6.5 0H17v14h-3.5z"/></svg>
+        <svg class="play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+      </button>
+      <button id="next" class="icon" type="button" aria-label="Next frame" title="Next frame">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM5.5 5v14l9-7z"/></svg>
+      </button>
+      <input id="seek" type="range" min="0" value="0" aria-label="Position">
+      <span id="position"></span>
+    </div>
+  </section>
+
+  <section id="settings" class="card" aria-label="Output">
+    <fieldset id="options">
+      <div class="row options">
+        <label>Format
+          <select id="format">
+            <option value="mp4">MP4 (H.264)</option>
+            <option value="webm">WebM (VP9)</option>
+            <option value="gif">GIF</option>
+          </select>
+        </label>
+        <label>Quality
+          <select id="quality">
+            <option value="best">Best quality</option>
+            <option value="good" selected>Balanced</option>
+            <option value="small">Smaller file</option>
+          </select>
+        </label>
+        <label>Size
+          <select id="size">
+            <option value="same">Same size</option>
+            <option value="480p">480p</option>
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+            <option value="4k">4K</option>
+          </select>
+        </label>
+        <label>Timing
+          <select id="timing">
+            <option value="original">Original</option>
+            <option value="fixed">Fixed FPS</option>
+          </select>
+        </label>
+        <label>FPS
+          <input id="fps" type="number" min="1" max="60" value="16">
+        </label>
+        <label class="check"><input id="combine" type="checkbox"> Combine into one file</label>
+      </div>
+    </fieldset>
+    <div class="row">
+      <button id="convert" disabled>Convert</button>
+      <button id="save" hidden></button>
+    </div>
+    <progress id="progress" value="0" aria-label="Conversion progress" hidden></progress>
+    <p id="status" role="status"></p>
+  </section>
+
+  <!-- Links open in a new tab: leaving this page would lose the files converted so far. -->
+  <footer>
+    <p>Made by iTroy0 · Source and App on 
+      <a href="https://github.com/iTroy0/WebP-Converter" target="_blank" rel="noopener">GitHub</a> ·
+      <a href="https://github.com/iTroy0/WebP-Converter/releases" target="_blank" rel="noopener">Desktop app</a>
+      for lossless video and big batches</p>
+    <a class="coffee" href="https://buymeacoffee.com/itroy0" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/>
+        <path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/>
+        <path d="M8 3v2m4-2v2"/>
+      </svg>
+      Buy me a coffee
+    </a>
+  </footer>
+</main>
+
+<template id="row">
+  <li>
+    <canvas width="40" height="40"></canvas>
+    <button class="name" type="button"></button>
+    <span class="note"></span>
+    <a hidden>Download</a>
+    <button class="remove" type="button">×</button>
+  </li>
+</template>
+
+<script type="module">
+import {FALLBACK_MICROSECONDS, convert, supported} from './convert.js';
+
+const byId = id => document.getElementById(id);
+const drop = byId('drop'), picker = byId('files'), queue = byId('queue');
+const button = byId('convert'), save = byId('save'), progress = byId('progress'), status = byId('status');
+const preview = byId('preview'), pick = byId('pick'), converted = byId('converted');
+const stage = byId('stage'), video = byId('video'), info = byId('info'), get = byId('get');
+const play = byId('play'), seek = byId('seek'), position = byId('position');
+const fileSize = bytes => bytes < 1e6 ? `${Math.ceil(bytes / 1e3)} kB` : `${(bytes / 1e6).toFixed(1)} MB`;
+const FORMAT_NAMES = {mp4: 'MP4 (H.264)', webm: 'WebM (VP9)', gif: 'GIF'};
+
+let items = [];       // the queued files: {file, row, link, output}
+let outputs = [];     // what the last conversion made: {name, blob, url, format, sourceBytes}
+let combined = null;  // that conversion's single output, when it combined the files
+let run = null;       // the AbortController of a conversion in progress
+let picked = null;    // the queued file that the preview shows
+let wantConverted = false;  // the Original/Converted switch as last set; a file with no result shows its original
+
+// ── Preview ──────────────────────────────────
+// A video plays in the <video>, with the browser's own controls. An animated WebP or GIF
+// is drawn on the canvas frame by frame, so that it too can be paused and stepped through.
+let decoder = null;     // reads the frames of the picture on the canvas
+let shown = null;       // the file or result in the preview
+let frames = 0, frame = 0, playing = true;
+let wanted = null, busy = false, timer = 0, due = 0;
+
+// Draw one frame and, while playing, line up the next. A request made during a decode
+// replaces the one waiting, so dragging the position bar never queues up work.
+async function showFrame(index) {
+  wanted = index;
+  if (busy) return;
+  busy = true;
+  while (wanted !== null && decoder) {
+    const from = decoder, at = wanted;
+    wanted = null;
+    let image;
+    try {
+      ({image} = await from.decode({frameIndex: at}));
+    } catch {
+      continue;                     // closed meanwhile, or a damaged frame: go on to any newer request
+    }
+    if (from === decoder) {         // otherwise another picture was opened meanwhile
+      if (stage.width !== image.displayWidth || stage.height !== image.displayHeight) {
+        stage.width = image.displayWidth;
+        stage.height = image.displayHeight;
+        stage.style.setProperty('--ratio', stage.width / stage.height);
+      }
+      const context = stage.getContext('2d');
+      context.clearRect(0, 0, stage.width, stage.height);
+      context.drawImage(image, 0, 0);
+      frame = at;
+      seek.value = at;
+      position.textContent = `${at + 1} / ${frames}`;
+      clearTimeout(timer);
+      if (playing && frames > 1 && wanted === null) {
+        // Keep to the picture's own clock: a late frame does not delay the ones after it.
+        due = Math.max(due + (image.duration || FALLBACK_MICROSECONDS) / 1000, performance.now());
+        timer = setTimeout(showFrame, due - performance.now(), (at + 1) % frames);
+      }
+    }
+    image.close();
+  }
+  busy = false;
+}
+
+// The length in seconds of an animated WebP, read from its frame headers without decoding:
+// each frame is an ANMF chunk, whose duration in milliseconds takes 3 bytes at byte 12.
+async function webpSeconds(file) {
+  try {
+    const view = new DataView(await file.arrayBuffer());
+    let ms = 0;
+    for (let at = 12; at + 8 <= view.byteLength;) {
+      const size = view.getUint32(at + 4, true);
+      if (view.getUint32(at, true) === 0x464D4E41) {       // 'ANMF'
+        ms += (view.getUint16(at + 20, true) | view.getUint8(at + 22) << 16) || FALLBACK_MICROSECONDS / 1000;
+      }
+      at += 8 + size + (size & 1);                         // chunks are padded to an even length
+    }
+    return ms / 1000;
+  } catch {
+    return null;                                           // a damaged file: its length goes unsaid
+  }
+}
+
+// One line about the picture in the preview: its size in pixels, frames, length and bytes,
+// and for a result also its format and how its size compares with the WebP it was made from.
+function describe(blob, made, width, height, frames, seconds) {
+  if (blob !== shown) return;       // another picture was opened meanwhile
+  const parts = [`${width} × ${height}`];
+  if (made) parts.push(FORMAT_NAMES[made.format]);
+  if (frames > 1) parts.push(`${frames} frames`);
+  if (seconds) parts.push(`${seconds.toFixed(1)} s`);
+  parts.push(fileSize(blob.size));
+  if (made) {
+    const ratio = blob.size / made.sourceBytes;
+    parts.push(ratio < 1 ? `${Math.round((1 - ratio) * 100)}% smaller` : `${ratio.toFixed(1)}× larger`);
+  }
+  info.textContent = parts.join(' · ');
+}
+
+function closePreview() {
+  clearTimeout(timer);
+  decoder?.close();
+  decoder = shown = null;
+  video.pause();
+}
+
+// Show a queued file, or what it was converted to (made).
+async function open(blob, made) {
+  if (blob === shown) return;
+  closePreview();
+  shown = blob;
+  info.textContent = '';
+  const isVideo = blob.type.startsWith('video/');
+  video.hidden = !isVideo;
+  stage.hidden = byId('player').hidden = isVideo;
+  URL.revokeObjectURL(video.src);
+  if (isVideo) {
+    video.src = URL.createObjectURL(blob);
+    video.onloadedmetadata = () => describe(blob, made, video.videoWidth, video.videoHeight, 0, video.duration);
+    return;
+  }
+  position.textContent = '';
+  frame = 0;
+  const opening = decoder = new ImageDecoder({data: blob.stream(), type: blob.type || 'image/webp'});
+  let first;
+  try {
+    // The frame count is final only once the whole file has been read.
+    await Promise.all([opening.tracks.ready, opening.completed]);
+    ({image: first} = await opening.decode({frameIndex: 0}));
+  } catch {
+    if (opening === decoder) {        // not a picture: show nothing rather than the last one
+      stage.getContext('2d').clearRect(0, 0, stage.width, stage.height);
+      position.textContent = 'No preview';
+    }
+    return;
+  }
+  const {displayWidth: width, displayHeight: height} = first;
+  first.close();
+  if (opening !== decoder) return;  // another picture was opened meanwhile
+  frames = opening.tracks.selectedTrack.frameCount;
+  seek.max = frames - 1;
+  byId('player').hidden = frames < 2;     // a still picture has nothing to play
+  due = performance.now();
+  showFrame(0);
+  // A GIF made here goes without its length: only a WebP's frame headers are read.
+  describe(blob, made, width, height, frames, made ? null : await webpSeconds(blob));
+}
+
+function setPlaying(on) {
+  playing = on;
+  play.dataset.playing = on;      // which icon shows
+  play.title = play.ariaLabel = on ? 'Pause' : 'Play';
+  clearTimeout(timer);
+  if (on) {
+    due = performance.now();
+    showFrame(frame);
+  }
+}
+
+// Show the frame before or after, and stop there.
+function step(by) {
+  setPlaying(false);
+  showFrame((frame + by + frames) % frames);
+}
+
+play.addEventListener('click', () => setPlaying(!playing));
+stage.addEventListener('click', () => setPlaying(!playing));
+byId('back').addEventListener('click', () => step(-1));
+byId('next').addEventListener('click', () => step(1));
+seek.addEventListener('input', () => {
+  clearTimeout(timer);            // or the frame that was lined up would undo the jump
+  due = performance.now();
+  showFrame(seek.valueAsNumber);
+});
+
+// What a queued file was converted to: its own result, or the one that all files were combined into.
+const result = item => item.output ?? combined;
+
+// Bring the preview in line with the queue, the picked file, Show preview and the Original/Converted switch.
+function present() {
+  if (!items.includes(picked)) picked = items.at(-1) ?? null;
+  const on = byId('preview-on').checked;
+  preview.dataset.state = !picked ? 'empty' : on ? 'on' : 'off';
+  byId('placeholder').textContent = picked ? 'Preview is off.' : 'Add WebP files to preview them here.';
+  for (const item of items) {
+    const shows = on && item === picked;
+    item.row.classList.toggle('picked', shows);
+    item.row.querySelector('.name').ariaCurrent = shows ? 'true' : null;
+  }
+  pick.hidden = items.length < 2;
+  if (!picked || !on) return closePreview();    // nothing is decoded while the preview is off
+  pick.replaceChildren(...items.map((item, n) => new Option(item.file.name, n, false, item === picked)));
+  const made = result(picked);
+  converted.disabled = !made;
+  converted.checked = wantConverted && Boolean(made);
+  byId('original').checked = !converted.checked;
+  get.hidden = !converted.checked;
+  if (converted.checked) Object.assign(get, {href: made.url, download: made.name, ariaLabel: `Download ${made.name}`});
+  if (converted.checked) open(made.blob, made);
+  else open(picked.file, null);
+}
+
+pick.addEventListener('change', () => {
+  picked = items[pick.value];
+  present();
+});
+byId('preview-on').addEventListener('change', present);
+byId('original').addEventListener('change', () => {
+  wantConverted = false;
+  present();
+});
+converted.addEventListener('change', () => {
+  wantConverted = true;
+  present();
+});
+
+// ── Queue ────────────────────────────────────
+// The line under a row's name: the file's size, then what became of it.
+function note(item, text) {
+  item.row.querySelector('.note').textContent = [fileSize(item.file.size), text].filter(Boolean).join(' · ');
+}
+
+// A still of the first frame: an <img> would play every queued file at once.
+async function thumbnail(canvas, file) {
+  try {
+    const bitmap = await createImageBitmap(file, {resizeHeight: 80});
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close();
+  } catch {
+    // Not an image: the row stays blank, and converting it says why.
+  }
+}
+
+function forget(output) {
+  URL.revokeObjectURL(output.url);
+  outputs = outputs.filter(other => other !== output);
+  if (output === combined) combined = null;
+}
+
+function add(files) {
+  for (const file of files) {
+    if (file.type !== 'image/webp' && !/\.webp$/i.test(file.name)) continue;
+    const row = byId('row').content.firstElementChild.cloneNode(true);
+    const item = {file, row, link: row.querySelector('a'), output: null};
+    const name = row.querySelector('.name'), remove = row.querySelector('.remove');
+    name.textContent = file.name;
+    name.ariaLabel = `Preview ${file.name}`;
+    row.addEventListener('click', event => {
+      if (event.target.closest('a, .remove')) return;   // the row's link and remove button do their own thing
+      picked = item;
+      present();
+    });
+    remove.ariaLabel = `Remove ${file.name}`;
+    remove.onclick = () => {
+      if (item.output) forget(item.output);
+      items = items.filter(other => other !== item);
+      (row.nextElementSibling ?? row.previousElementSibling)?.querySelector('.remove').focus();
+      row.remove();
+      refresh();
+    };
+    note(item);
+    thumbnail(row.querySelector('canvas'), file);
+    queue.append(row);
+    items.push(item);
+    picked = item;                // the preview shows the file added last
+  }
+  refresh();
+}
+
+// Bring every control in line with the queue, the options and the results.
+function refresh() {
+  button.disabled = !items.length;
+  byId('clear').hidden = !items.length;
+  byId('combine').disabled = items.length < 2;
+  byId('quality').disabled = byId('format').value === 'gif';    // 256 colours leave nothing to choose
+  byId('fps').disabled = byId('timing').value !== 'fixed';
+  save.hidden = !outputs.length;
+  save.textContent = outputs.length > 1 ? `Download all (${outputs.length})` : `Download ${outputs[0]?.name}`;
+  present();
+}
+
+// During a conversion the list and the options stay as they are; the preview stays free to use.
+function lock(on) {
+  picker.disabled = byId('options').disabled = byId('clear').disabled = on;
+  for (const remove of queue.querySelectorAll('.remove')) remove.disabled = on;
+}
+
+byId('options').addEventListener('change', refresh);
+picker.addEventListener('change', () => {
+  add(picker.files);
+  picker.value = '';              // so that choosing the same file again counts
+});
+
+// A file dropped anywhere on the page counts; without this the browser opens it instead.
+addEventListener('dragover', event => {
+  event.preventDefault();
+  if (!picker.disabled) drop.classList.add('over');
+});
+addEventListener('dragleave', event => event.relatedTarget || drop.classList.remove('over'));
+addEventListener('drop', event => {
+  event.preventDefault();
+  drop.classList.remove('over');
+  if (!picker.disabled) add(event.dataTransfer.files);
+});
+
+byId('clear').addEventListener('click', () => {
+  outputs.forEach(forget);
+  items = [];
+  queue.replaceChildren();
+  status.textContent = '';
+  refresh();
+});
+
+save.addEventListener('click', async () => {
+  for (const {name, url} of outputs) {
+    Object.assign(document.createElement('a'), {href: url, download: name}).click();
+    await new Promise(resolve => setTimeout(resolve, 200));   // downloads that start together get dropped
+  }
+});
+
+// ── Conversion ───────────────────────────────
+button.addEventListener('click', async () => {
+  if (run) return run.abort();    // during a conversion the button reads Cancel
+  run = new AbortController();
+  const format = byId('format').value, started = performance.now();
+  const options = {
+    format, quality: byId('quality').value, size: byId('size').value, signal: run.signal,
+    fps: byId('timing').value === 'fixed'
+      ? Math.min(60, Math.max(1, Math.round(byId('fps').valueAsNumber) || 16)) : null,
+  };
+  // One job for each output: every file by itself, or all of them combined.
+  const combine = byId('combine').checked && items.length > 1;
+  const jobs = combine
+    ? [{items, name: 'combined'}]
+    : items.map(item => ({items: [item], name: item.file.name.replace(/\.webp$/i, '')}));
+  let failed = 0, failure = '';
+
+  outputs.forEach(forget);
+  for (const item of items) {
+    item.output = null;
+    item.link.hidden = true;
+    item.row.classList.remove('failed');
+    note(item);
+  }
+  lock(true);
+  button.textContent = 'Cancel';
+  progress.value = 0;
+  progress.hidden = false;
+  refresh();
+
+  try {
+    for (const [n, job] of jobs.entries()) {
+      status.textContent = jobs.length > 1 ? `Converting ${n + 1} of ${jobs.length}…` : 'Converting…';
+      for (const item of job.items) note(item, 'Converting…');
+      try {
+        const blob = await convert(job.items.map(item => item.file), {
+          ...options, onProgress: done => progress.value = (n + done) / jobs.length,
+        });
+        const output = {
+          name: `${job.name}.${format}`, blob, url: URL.createObjectURL(blob), format,
+          sourceBytes: job.items.reduce((sum, item) => sum + item.file.size, 0),
+        };
+        outputs.push(output);
+        for (const item of job.items) note(item, 'Done');
+        if (combine) {
+          combined = output;
+        } else {                        // a file converted by itself gets its own link
+          const [item] = job.items;
+          item.output = output;
+          Object.assign(item.link, {
+            href: output.url, download: output.name, ariaLabel: `Download ${output.name}`, hidden: false,
+          });
+          note(item, `Done · ${fileSize(blob.size)}`);
+        }
+      } catch (error) {
+        if (run.signal.aborted) {
+          for (const item of job.items) note(item);
+          break;
+        }
+        failed++;
+        failure = error.message;
+        for (const item of job.items) {
+          item.row.classList.add('failed');
+          note(item, `Failed: ${failure}`);
+        }
+      }
+    }
+    const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    const total = fileSize(outputs.reduce((sum, output) => sum + output.blob.size, 0));
+    status.textContent = run.signal.aborted ? 'Cancelled'
+      : !failed ? `Done in ${seconds} s · ${total}`
+      : jobs.length === 1 ? `Could not convert: ${failure}`
+      : `${outputs.length} converted, ${failed} failed`;
+  } finally {
+    run = null;
+    lock(false);
+    button.textContent = 'Convert';
+    progress.hidden = true;
+    if (outputs.length) wantConverted = true;    // the preview turns to what was made
+    refresh();
+  }
+});
+
+if (!supported()) {
+  lock(true);
+  status.textContent = 'This browser cannot convert video by itself. Use Chrome, Edge or Firefox on a computer.';
+}
+refresh();
+</script>
+</body>
+</html>
