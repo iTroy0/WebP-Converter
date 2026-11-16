@@ -11,6 +11,8 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
 
 [![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/itroy0)
 
+**Use it in your browser:** [itroy0.github.io/WebP-Converter](https://itroy0.github.io/WebP-Converter/) — nothing to install, and nothing is uploaded.
+
 ---
 
 ## About
@@ -64,6 +66,14 @@ Set **Quality → Lossless** to keep every frame bit-for-bit identical to the so
 Lossless files are much larger than compressed ones, and many browsers, phones and built-in players can't open them — VLC and mpv can. MKV is the safest choice and the only one that keeps transparency. GIF is limited to 256 colours, so it has no lossless mode.
 
 Most animated WebPs are themselves lossy. Lossless output then keeps their compression artifacts exactly, so it only adds size: an 11 MB lossy clip became 67 MB as lossless MKV and 6 MB at CRF 18, which looks the same. The app says so under Quality when a queued file is lossy.
+
+---
+
+## Quick Start (Browser)
+
+Open **[itroy0.github.io/WebP-Converter](https://itroy0.github.io/WebP-Converter/)**. Your browser does the converting, so your files never leave your device. It turns animated WebP into MP4, WebM or GIF, one by one or combined into one file, with a preview of the original and the result.
+
+It needs Chrome, Edge or Firefox on a computer; Safari can't convert video in the browser yet. For lossless output, MKV, or batches of thousands of files, use the desktop app.
 
 ---
 
@@ -143,6 +153,7 @@ The output will be at `dist/WebP Converter`.
 | `start.sh` | Interactive launcher/builder (Linux/macOS) |
 | `install_requirements.bat` | Quick dependency install (Windows) |
 | `app_icon.ico` | Application icon |
+| `docs/` | Browser version, published with GitHub Pages |
 | `tests/` | Test suite: UI behaviour, layout fit, encoding, lossless round-trips |
 | `CHANGELOG.md` | What changed in each release |
 
