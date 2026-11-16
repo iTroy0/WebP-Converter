@@ -9,9 +9,13 @@ A simple, beautiful, and powerful tool to convert animated WebP images into vide
   <img src="https://img.shields.io/github/stars/iTroy0/WebP-Converter?style=social" alt="GitHub Stars">
 </p>
 
-[![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge)](https://buymeacoffee.com/itroy0)
+<p align="center">
+  <a href="https://buymeacoffee.com/itroy0"><img src="https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-%23FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge" alt="Buy Me a Coffee"></a>
+</p>
 
 **Use it in your browser:** [itroy0.github.io/WebP-Converter](https://itroy0.github.io/WebP-Converter/) — nothing to install, and nothing is uploaded.
+
+**Or download it here:** [latest release](https://github.com/iTroy0/WebP-Converter/releases/latest) for Windows, or [run it from source](#run-from-source) on macOS and Linux.
 
 ---
 
