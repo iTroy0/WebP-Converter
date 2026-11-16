@@ -1,9 +1,62 @@
 """Pure encoding helpers — no window needed."""
+import os
+import tempfile
 import unittest
 
 from PIL import Image
 
 import webp_converter_gui as G
+from tests.support import make_webp
+
+
+class FrameTimingTest(unittest.TestCase):
+    """Timing read from the container, and when it allows piping frames."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+
+    def webp(self, name, durations):
+        return make_webp(os.path.join(self.dir, name), size=(32, 24),
+                         frames=len(durations), duration=durations)
+
+    def rate(self, *clips, source_timing=True):
+        files = [self.webp(f"{i}.webp", d) for i, d in enumerate(clips)]
+        return G.stream_rate(files, {"source_timing": source_timing, "fps": 16})
+
+    def test_durations_match_what_the_decoder_reports(self):
+        path = self.webp("clip.webp", [30, 40, 50, 60, 70, 80])
+        decoded = []
+        with Image.open(path) as im:
+            for i in range(im.n_frames):
+                im.seek(i)
+                im.load()
+                decoded.append(im.info["duration"])
+        self.assertEqual(decoded, [30, 40, 50, 60, 70, 80])
+        self.assertEqual(G.webp_frame_durations(path), decoded)
+
+    def test_still_image_has_no_durations_and_other_formats_are_refused(self):
+        still = os.path.join(self.dir, "still.webp")
+        Image.new("RGB", (8, 8)).save(still)
+        self.assertEqual(G.webp_frame_durations(still), [])
+        png = os.path.join(self.dir, "not-webp.webp")
+        Image.new("RGB", (8, 8)).save(png, "PNG")
+        self.assertIsNone(G.webp_frame_durations(png))
+        self.assertIsNone(G.stream_rate([png], {"source_timing": True, "fps": 16}))
+
+    def test_steady_timing_is_one_exact_rate(self):
+        self.assertEqual(self.rate([40] * 5), "5000/200")
+        # 30 fps rounded to whole milliseconds is still 30 fps.
+        self.assertEqual(self.rate([33, 33, 34, 33, 33, 34]), "6000/200")
+        self.assertEqual(self.rate([40] * 4, [40] * 3), "7000/280")
+
+    def test_varied_timing_cannot_be_piped(self):
+        self.assertIsNone(self.rate([40, 80, 120, 40]))
+        self.assertIsNone(self.rate([40] * 4, [50] * 4))    # clips disagree
+
+    def test_fixed_fps_always_pipes_at_the_chosen_rate(self):
+        self.assertEqual(self.rate([40, 80, 120, 40], source_timing=False), "16")
 
 
 class EncoderArgsTest(unittest.TestCase):

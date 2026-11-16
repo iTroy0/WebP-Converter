@@ -4,10 +4,13 @@ import os
 import re
 import sys
 import json
+import ctypes
+import itertools
 import threading
 import tempfile
 import subprocess
 import tkinter as tk
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from tkinter import filedialog, messagebox, font as tkfont
@@ -269,6 +272,22 @@ def save_settings(data):
         pass
 
 
+def screen_size(window) -> tuple:
+    """The display's size in physical pixels.
+
+    Tk measures the screen as it starts, before CustomTkinter makes the
+    process DPI-aware, so on a scaled Windows display Tk's own figure is
+    already divided by the scale.
+    """
+    if sys.platform == "win32":
+        try:
+            metric = ctypes.windll.user32.GetSystemMetrics
+            return metric(0), metric(1)       # SM_CXSCREEN, SM_CYSCREEN
+        except (AttributeError, OSError):
+            pass
+    return window.winfo_screenwidth(), window.winfo_screenheight()
+
+
 def _num(value, default, lo, hi):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
@@ -326,6 +345,49 @@ def letterbox(img: Image.Image, target: tuple, keep_alpha: bool = False) -> Imag
         canvas = Image.new("RGBA", target, (0, 0, 0, 255))
         canvas.paste(fitted, pos, fitted)
     return canvas
+
+
+def webp_frame_durations(path: str) -> list[int] | None:
+    """Each frame's duration in ms, read from the container without decoding.
+
+    [] for a still image; None when the file isn't a WebP container.
+    """
+    durations = []
+    with open(path, "rb") as f:
+        head = f.read(12)
+        if head[:4] != b"RIFF" or head[8:] != b"WEBP":
+            return None
+        while len(chunk := f.read(8)) == 8:
+            size = int.from_bytes(chunk[4:], "little")
+            if chunk[:4] == b"ANMF":
+                # Frame header: x, y, width, height (3 bytes each), duration.
+                durations.append(int.from_bytes(f.read(16)[12:15], "little"))
+                size -= 16
+            f.seek(size + (size & 1), 1)      # chunks are padded to even length
+    return durations
+
+
+def stream_rate(files: list, settings: dict) -> str | None:
+    """The one frame rate at which files' frames can be piped to ffmpeg, or
+    None when their timing varies and each frame needs its own duration."""
+    if not settings["source_timing"]:
+        return str(settings["fps"])
+    durations = []
+    for path in files:
+        try:
+            found = webp_frame_durations(path)
+        except OSError:
+            return None                       # the decoder reports this file
+        if found is None:
+            return None
+        durations += found or [0]
+    if not any(durations):
+        return str(settings["fps"])           # no timing stored at all
+    # A steady rate rounded to whole milliseconds (30 fps is 33, 33, 34 ms)
+    # still counts as constant; the average is its true rate.
+    if min(durations) <= 0 or max(durations) - min(durations) > 1:
+        return None
+    return f"{1000 * len(durations)}/{sum(durations)}"
 
 
 def unique_output_path(folder: str, stem: str, ext: str) -> str:
@@ -626,8 +688,9 @@ class WebPConverterApp(_AppBase):
         # Never open larger than the display — including a size saved on a bigger
         # monitor. CTk geometry is in scaled units; screen size is physical pixels.
         scale = ctk.ScalingTracker.get_window_scaling(self)
-        avail_w = int((self.winfo_screenwidth() - 40) / scale)
-        avail_h = int((self.winfo_screenheight() - 80) / scale)
+        screen_w, screen_h = screen_size(self)
+        avail_w = int((screen_w - 40) / scale)
+        avail_h = int((screen_h - 80) / scale)
         w, h, pos = *WIN_DEFAULT, ""
         geo = self._settings.get("geometry", "")
         m = re.fullmatch(r"(\d{3,5})x(\d{3,5})([+-]\d+[+-]\d+)", geo) \
@@ -876,7 +939,7 @@ class WebPConverterApp(_AppBase):
             scrollbar_button_color=LINE,
             scrollbar_button_hover_color=FAINT)
         self.files_list_frame._parent_canvas.bind(
-            "<Configure>", self._sync_queue_scrollbar, add="+")
+            "<Configure>", self._sync_queue_scrollbar_soon, add="+")
 
         # Border drawn in the fill colour at rest so hover/drag can light it
         # without changing any geometry.
@@ -931,7 +994,13 @@ class WebPConverterApp(_AppBase):
         self.files_list_frame.configure(fg_color=DROP_TINT if on else "transparent")
         self.drop_zone.configure(border_color=ACCENT if on else RAISED)
 
-    def _sync_queue_scrollbar(self, _event=None):
+    def _sync_queue_scrollbar_soon(self, _event=None):
+        # From a timer, not directly or when idle: Tk is often still arranging
+        # the scrollbar here, CTk widgets flush idle callbacks while it does,
+        # and a scrollbar removed at that point is mapped straight back.
+        self.after(1, self._sync_queue_scrollbar)
+
+    def _sync_queue_scrollbar(self):
         """Show the queue's scrollbar only while the list overflows.
 
         CTkScrollableFrame always shows it, and in this chrome-light layout an
@@ -940,6 +1009,7 @@ class WebPConverterApp(_AppBase):
         """
         lst = self.files_list_frame
         try:
+            lst.update_idletasks()    # a timer can fire before new rows are measured
             if lst.winfo_reqheight() > lst._parent_canvas.winfo_height():
                 lst._scrollbar.grid()
             else:
@@ -1667,14 +1737,15 @@ class WebPConverterApp(_AppBase):
                     meta["thumbs"] = make_thumbs(im, 2 * THUMB, 2 * (R_CTRL - 2))
                 except Exception:
                     pass             # the row keeps its placeholder
-                n = getattr(im, "n_frames", 1)
-                total = 0
-                for i in range(n):
-                    im.seek(i)
-                    im.load()  # duration only populated after load
-                    total += int(im.info.get("duration", 0) or 0)
-                meta["frames"] = n
-                meta["total_ms"] = total
+                durations = webp_frame_durations(path)
+                if durations is None:       # not a WebP container: decode it
+                    durations = []
+                    for i in range(getattr(im, "n_frames", 1)):
+                        im.seek(i)
+                        im.load()  # duration only populated after load
+                        durations.append(int(im.info.get("duration", 0) or 0))
+                meta["frames"] = len(durations) or 1
+                meta["total_ms"] = sum(durations)
         except Exception:
             pass
         return meta
@@ -1691,6 +1762,8 @@ class WebPConverterApp(_AppBase):
             self.file_thumbs[path] = thumbs
             self._show_thumb(self.file_thumb_labels.get(path), path)
         self._refresh_summary()
+        if path == self.selected_file:
+            self._update_preview_info()       # its caption shows the frame count
 
     def _show_thumb(self, label, path):
         # A fresh CTkImage per row: CTkImage keeps a reference to every label
@@ -1815,7 +1888,7 @@ class WebPConverterApp(_AppBase):
             remove_btn.bind("<Enter>", on_enter)
             remove_btn.bind("<Leave>", on_leave)
 
-        self.after_idle(self._sync_queue_scrollbar)
+        self._sync_queue_scrollbar_soon()
 
     def _apply_status_style(self, label: ctk.CTkLabel, status: str):
         styles = {
@@ -1901,6 +1974,8 @@ class WebPConverterApp(_AppBase):
         cursor = "hand2" if on else "arrow"
         self.preview_well.configure(cursor=cursor)
         self.preview_label.configure(cursor=cursor)
+        if not on:
+            self._tips["preview"].hide()     # it describes a clip that is gone
 
     def _detach_preview_image(self):
         """Drop the photo image from the underlying tk label while it still exists.
@@ -2045,9 +2120,12 @@ class WebPConverterApp(_AppBase):
             return
         total = sum(d for _, d in self.preview_frames) / 1000
         state = "playing" if self.preview_running else "paused"
-        suffix = f" (first {MAX_PREVIEW_FRAMES})" if n >= MAX_PREVIEW_FRAMES else ""
+        # The preview holds at most MAX_PREVIEW_FRAMES; the clip may have more.
+        meta = self.file_meta.get(self.selected_file) or {}
+        frames = max(n, meta.get("frames", 0))
+        suffix = f" (first {n})" if frames > n else ""
         self.preview_info.configure(
-            text=f"{n} frames{suffix}  ·  {total:.1f}s  ·  {state}")
+            text=f"{frames} frames{suffix}  ·  {total:.1f}s  ·  {state}")
 
     def _toggle_preview(self):
         if self.preview_running:
@@ -2194,45 +2272,15 @@ class WebPConverterApp(_AppBase):
         with tempfile.TemporaryDirectory() as tmp:
             temp_dir = Path(tmp)
             try:
+                n = len(files)
                 if combine:
-                    n = len(files)
-                    all_frames: list[tuple[str, int]] = []
-                    target: tuple | None = None
-                    for idx, webp_file in enumerate(files):
-                        if self._cancel_requested:
-                            self._finish_cancelled()
-                            return
-                        self._ui(self._update_file_status, webp_file, "converting")
-                        stage = f"Extracting {idx + 1}/{n}"
-                        try:
-                            if target is None:
-                                with Image.open(webp_file) as im:
-                                    target = self._target_size(im.width, im.height,
-                                                               settings)
-                            frames = self._extract_frames(
-                                webp_file, temp_dir, settings,
-                                start_idx=len(all_frames),
-                                target_override=target,
-                                progress=lambda p, i=idx: self._ui_progress(
-                                    (i + p) / (n + 1), stage),
-                            )
-                            if not frames:
-                                raise RuntimeError("no frames decoded")
-                        except Exception as e:
-                            for f in files:
-                                self._ui(self._update_file_status, f, "error")
-                            raise RuntimeError(
-                                f"{Path(webp_file).name}: {e}") from e
-                        all_frames.extend(frames)
-
-                    if self._cancel_requested:
-                        self._finish_cancelled()
-                        return
-
+                    with Image.open(files[0]) as im:
+                        target = self._target_size(im.width, im.height, settings)
                     out = unique_output_path(output_folder, "combined", fmt)
-                    self._encode(all_frames, out, settings,
-                                 progress=lambda p: self._ui_progress(
-                                     (n + p) / (n + 1), "Encoding"))
+                    self._convert(
+                        files, out, settings, temp_dir, target,
+                        lambda p, stage, i: self._ui_progress(
+                            p, stage if i is None else f"{stage} {i + 1}/{n}"))
                     if self._cancel_requested:
                         self._finish_cancelled()
                         return
@@ -2241,32 +2289,17 @@ class WebPConverterApp(_AppBase):
                     done_count = len(files)
 
                 else:
-                    n = len(files)
                     for idx, webp_file in enumerate(files):
                         if self._cancel_requested:
                             self._finish_cancelled()
                             return
-                        self._ui(self._update_file_status, webp_file, "converting")
-                        name = Path(webp_file).name
-                        frames = []
                         try:
-                            frames = self._extract_frames(
-                                webp_file, temp_dir, settings,
-                                progress=lambda p, i=idx: self._ui_progress(
-                                    (2 * i + p) / (2 * n),
-                                    f"Extracting {i + 1}/{n}"),
-                            )
-                            if self._cancel_requested:
-                                self._finish_cancelled()
-                                return
-                            if not frames:
-                                raise RuntimeError("no frames decoded")
                             out = unique_output_path(
                                 output_folder, Path(webp_file).stem, fmt)
-                            self._encode(frames, out, settings,
-                                         progress=lambda p, i=idx: self._ui_progress(
-                                             (2 * i + 1 + p) / (2 * n),
-                                             f"Encoding {i + 1}/{n}"))
+                            self._convert(
+                                [webp_file], out, settings, temp_dir, None,
+                                lambda p, stage, _i, i=idx: self._ui_progress(
+                                    (i + p) / n, f"{stage} {i + 1}/{n}"))
                             if self._cancel_requested:
                                 self._finish_cancelled()
                                 return
@@ -2274,14 +2307,7 @@ class WebPConverterApp(_AppBase):
                             done_count += 1
                         except Exception as e:
                             self._ui(self._update_file_status, webp_file, "error")
-                            failures.append((name, str(e)))
-                        finally:
-                            # free disk space before next file
-                            for frame_path, _ in frames:
-                                try:
-                                    os.remove(frame_path)
-                                except OSError:
-                                    pass
+                            failures.append((Path(webp_file).name, str(e)))
 
                 if failures:
                     first = failures[0]
@@ -2307,8 +2333,8 @@ class WebPConverterApp(_AppBase):
                 # The full message is in the toast; the bar only has room for this.
                 self._ui(self.progress_text.configure, text="Conversion failed")
                 self._ui(self._commit_status, "Error", DANGER)
-                for f in files:
-                    if self.file_status.get(f) == "converting":
+                for f in files:      # a combined output fails as a whole
+                    if combine or self.file_status.get(f) == "converting":
                         self._ui(self._update_file_status, f, "error")
 
             finally:
@@ -2318,9 +2344,16 @@ class WebPConverterApp(_AppBase):
                 self._ui(self._set_controls_enabled, True)
 
     def _finish_cancelled(self):
+        self._ui(self._clear_converting)
         self._ui(self.progress_text.configure, text="Cancelled")
         self._ui(self._commit_status, "Cancelled", WARN)
         self._ui(self.show_toast, "Conversion cancelled", "warn")
+
+    def _clear_converting(self):
+        """A file caught mid-conversion by a cancel goes back to waiting."""
+        for path, status in list(self.file_status.items()):
+            if status == "converting":
+                self._update_file_status(path, "")
 
     def _reset_convert_btn(self):
         self.convert_btn.configure(
@@ -2328,14 +2361,78 @@ class WebPConverterApp(_AppBase):
             fg_color=ACCENT, hover_color=ACCENT_HI, text_color=ON_ACCENT)
         self._refresh_convert_btn()
 
-    # ── Frame extraction ─────────────────────
+    # ── Frames to output ─────────────────────
 
-    def _extract_frames(self, webp_file: str, temp_dir: Path, settings: dict,
-                        start_idx: int = 0, target_override: tuple | None = None,
-                        progress=None) -> list[tuple[str, int]]:
-        """Stream frames to PNG files. Returns [(path, duration_ms), ...].
+    def _convert(self, files: list, out: str, settings: dict, temp_dir: Path,
+                 target: tuple | None, progress):
+        """Write the frames of files, in order, to the single output out.
+
+        Constant-rate video is piped straight into ffmpeg and a GIF is built
+        in memory. Only video whose frame durations vary goes through PNG
+        files in temp_dir, so that each frame keeps its own duration.
+
+        progress(fraction, stage, index) reports this output's own progress;
+        index is the file being read, or None once only encoding is left.
+        Stops early when cancelled and never leaves a half-written output.
+        """
+        n = len(files)
+        gif = settings["format"] == ".gif"
+        rate = None if gif else stream_rate(files, settings)
+        steps = n if rate else n + 1      # an encode pass follows the frames
+        stage = "Converting" if rate or gif else "Extracting"
+
+        def encoding(p):
+            progress((n + p) / steps, "Encoding", None)
+
+        def frames():
+            for i, path in enumerate(files):
+                if self._cancel_requested:
+                    return
+                self._ui(self._update_file_status, path, "converting")
+                try:
+                    count = 0
+                    for frame in self._frames(
+                            path, settings, target,
+                            lambda p, i=i: progress((i + p) / steps, stage, i)):
+                        count += 1
+                        yield frame
+                    if not count and not self._cancel_requested:
+                        raise RuntimeError("no frames decoded")
+                except Exception as e:
+                    if n > 1:             # say which of the combined files failed
+                        raise RuntimeError(f"{Path(path).name}: {e}") from e
+                    raise
+
+        saved: list[tuple[str, int]] = []
+        try:
+            if rate:
+                self._encode_stream((img for img, _ in frames()), rate, out,
+                                    settings)
+            elif gif:
+                self._encode_gif(frames(), out, settings, encoding)
+            else:
+                for img, duration in frames():
+                    path = temp_dir / f"frame_{len(saved):06d}.png"
+                    img.save(path)
+                    saved.append((str(path), duration))
+                if saved and not self._cancel_requested:
+                    self._encode_ffmpeg(saved, out, settings, encoding)
+        except Exception:
+            self._remove_partial(out)
+            raise
+        finally:
+            for path, _ in saved:         # free disk space before the next file
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        if self._cancel_requested:
+            self._remove_partial(out)
+
+    def _frames(self, webp_file: str, settings: dict,
+                target_override: tuple | None = None, progress=None):
+        """Yield (RGBA frame at the output size, duration_ms) for each frame.
         Raises on decode failure."""
-        frames: list[tuple[str, int]] = []
         with Image.open(webp_file) as im:
             target = target_override or self._target_size(im.width, im.height,
                                                           settings)
@@ -2350,34 +2447,19 @@ class WebPConverterApp(_AppBase):
                     img = letterbox(img, target, settings["keep_alpha"])
                 elif img.size != target:
                     img = img.resize(target, Image.LANCZOS)
-                path = temp_dir / f"frame_{start_idx + i:06d}.png"
-                img.save(path)
-                frames.append((str(path), duration))
+                yield img, duration
                 if progress and n_frames:
                     progress(min(1.0, (i + 1) / n_frames))
-        return frames
 
     # ── Encoding ─────────────────────────────
 
-    def _frame_durations_sec(self, frames: list[tuple[str, int]],
+    def _frame_durations_sec(self, frames: list[tuple[object, int]],
                              settings: dict) -> list[float]:
+        """Seconds each frame lasts, from (frame, duration_ms) pairs."""
         fallback = 1.0 / settings["fps"]
         if settings["source_timing"]:
             return [(ms / 1000.0) if ms > 0 else fallback for _, ms in frames]
         return [fallback] * len(frames)
-
-    def _encode(self, frames: list[tuple[str, int]], output_path: str,
-                settings: dict, progress=None):
-        try:
-            if settings["format"] == ".gif":
-                self._encode_gif(frames, output_path, settings, progress)
-            else:
-                self._encode_ffmpeg(frames, output_path, settings, progress)
-        except Exception:
-            self._remove_partial(output_path)
-            raise
-        if self._cancel_requested:
-            self._remove_partial(output_path)
 
     @staticmethod
     def _remove_partial(path: str):
@@ -2388,18 +2470,17 @@ class WebPConverterApp(_AppBase):
             pass
 
     def _encode_gif(self, frames, output_path, settings, progress=None):
-        durations = self._frame_durations_sec(frames, settings)
-        images = []
+        """Build the GIF in memory from (RGBA frame, duration_ms) pairs."""
+        quantized: list[tuple[Image.Image, int]] = []
         try:
-            for i, (path, _) in enumerate(frames):
-                if self._cancel_requested:
-                    return
-                with Image.open(path) as img:
-                    images.append(rgba_to_gif_frame(img.convert("RGBA")))
-                if progress:
-                    progress(0.9 * (i + 1) / len(frames))
-            if not images:
-                raise RuntimeError("no frames to encode")
+            for img, ms in frames:
+                quantized.append((rgba_to_gif_frame(img), ms))
+            if not quantized or self._cancel_requested:
+                return
+            if progress:
+                progress(0.0)             # writing is one call: no finer steps
+            images = [img for img, _ in quantized]
+            durations = self._frame_durations_sec(quantized, settings)
             images[0].save(
                 output_path, save_all=True, append_images=images[1:],
                 duration=[max(20, int(d * 1000)) for d in durations],
@@ -2408,7 +2489,7 @@ class WebPConverterApp(_AppBase):
             if progress:
                 progress(1.0)
         finally:
-            for img in images:
+            for img, _ in quantized:
                 img.close()
 
     def _encode_ffmpeg(self, frames, output_path, settings, progress=None):
@@ -2420,7 +2501,9 @@ class WebPConverterApp(_AppBase):
             last_entry = ""
             for (frame_path, _), dur in zip(frames, durations):
                 escaped = frame_path.replace(os.sep, "/").replace("'", "'\\''")
-                last_entry = f"file '{escaped}'\n"
+                # An image defaults to a 25 fps clock, which snaps durations
+                # to 40 ms steps; a 1000 fps clock keeps whole milliseconds.
+                last_entry = f"file '{escaped}'\noption framerate 1000\n"
                 f.write(last_entry)
                 f.write(f"duration {dur:.6f}\n")
             # concat demuxer quirk: repeat last file so its duration is honored
@@ -2432,12 +2515,48 @@ class WebPConverterApp(_AppBase):
                              settings["lossless"]),
                output_path]
 
-        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+        with self._ffmpeg(cmd, stdout=subprocess.PIPE) as proc:
+            total = len(frames)
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="ignore").strip()
+                if progress and total and line.startswith("frame="):
+                    try:
+                        progress(min(1.0, int(line.split("=", 1)[1]) / total))
+                    except ValueError:
+                        pass
+        if progress and not self._cancel_requested:
+            progress(1.0)
+
+    def _encode_stream(self, images, rate: str, output_path: str, settings: dict):
+        """Pipe RGBA frames straight into ffmpeg: no temp files to write and
+        read back. Every frame lasts 1/rate, so the rate must be constant."""
+        images = iter(images)
+        first = next(images, None)
+        if first is None:
+            return                            # cancelled before the first frame
+        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-f", "rawvideo",
+               "-pixel_format", "rgba", "-video_size", "%dx%d" % first.size,
+               "-framerate", rate, "-i", "-", "-nostats",
+               *encoder_args(settings["format"], settings["crf"],
+                             settings["lossless"]),
+               output_path]
+        with self._ffmpeg(cmd, stdin=subprocess.PIPE,
+                          stdout=subprocess.DEVNULL) as proc:
+            for img in itertools.chain([first], images):
+                try:
+                    proc.stdin.write(img.tobytes())
+                except OSError:
+                    break     # ffmpeg quit, cancelled or failed: _ffmpeg says which
+
+    @contextmanager
+    def _ffmpeg(self, cmd: list, **pipes):
+        """Run ffmpeg and yield the process to feed or read; raise if it fails."""
+        kwargs = {"stderr": subprocess.PIPE, **pipes}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-        # The context manager closes both pipes; without it every encode
-        # leaked two handles.
+        # The context manager closes the pipes; without it every encode
+        # leaked their handles.
         with subprocess.Popen(cmd, **kwargs) as proc:
             self._ffmpeg_proc = proc
             stderr_chunks: list[bytes] = []
@@ -2446,16 +2565,17 @@ class WebPConverterApp(_AppBase):
                 daemon=True)
             drain.start()
             try:
-                total = len(frames)
-                for raw in proc.stdout:
-                    line = raw.decode("utf-8", errors="ignore").strip()
-                    if progress and total and line.startswith("frame="):
-                        try:
-                            progress(min(1.0, int(line.split("=", 1)[1]) / total))
-                        except ValueError:
-                            pass
-                proc.wait()
+                yield proc
+            except BaseException:
+                proc.kill()               # nothing is left to feed or read it
+                raise
             finally:
+                if proc.stdin:
+                    try:
+                        proc.stdin.close()    # end of input: ffmpeg finishes up
+                    except OSError:
+                        pass                  # it already quit; see its exit code
+                proc.wait()
                 self._ffmpeg_proc = None
             drain.join(timeout=2)
 
@@ -2463,8 +2583,6 @@ class WebPConverterApp(_AppBase):
             err = (stderr_chunks[0] if stderr_chunks else b"")
             raise RuntimeError(
                 f"ffmpeg failed: {err.decode(errors='ignore')[-400:]}")
-        if progress and not self._cancel_requested:
-            progress(1.0)
 
     # ── Toast notifications ──────────────────
 

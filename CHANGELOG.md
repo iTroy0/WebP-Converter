@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Video conversion is up to 4× faster and writes no temporary files** when
+  a clip plays at a steady rate, or Timing is set to Fixed FPS. Frames go
+  straight to FFmpeg instead of being saved as PNGs and read back, so a big
+  batch no longer fills the system drive, and the last frame is no longer
+  stored twice. Only video whose frames have different durations still goes
+  through temporary frames.
+- GIF output is built in memory, without temporary frames, and is about a
+  third quicker.
+- Adding a file no longer decodes every frame to read its duration.
+- Needs imageio-ffmpeg 0.6 or newer (FFmpeg 7); `requirements.txt` asks for it.
+
+### Fixed
+
+- Original timing was snapped to 40 ms steps: a clip faster than 25 fps lost
+  frames, and other rates played unevenly or at the wrong speed.
+- On a scaled Windows display (150%, for example) the window opened smaller
+  than intended and could be shrunk below its contents.
+- The queue's scrollbar could appear with a single file in the list.
+- After Cancel, the file being converted stayed marked as converting.
+- The preview tooltip stayed on screen after the queue was cleared.
+- The preview caption counted at most 200 frames for a longer clip.
+- The app failed to install on Python 3.15, where Pillow 11 has no build.
+
 ## 2.3.0
 
 Everything since v2.2.

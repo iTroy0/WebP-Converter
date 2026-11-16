@@ -36,6 +36,20 @@ class UITest(AppFixture, unittest.TestCase):
         self.assertEqual((meta["w"], meta["h"], meta["frames"], meta["total_ms"]),
                          (64, 48, 6, 480))
 
+    def test_caption_counts_every_frame_when_the_preview_is_capped(self):
+        app = self.app
+        self.assertIn("6 frames  ·", app.preview_info.cget("text"))
+
+        self.addCleanup(setattr, G, "MAX_PREVIEW_FRAMES", G.MAX_PREVIEW_FRAMES)
+        self.addCleanup(app.clear_file_list)    # the next test reloads all six
+        G.MAX_PREVIEW_FRAMES = 4
+        app.clear_file_list()
+        app._add_files([self.sample])
+        self.assertTrue(wait_until(app, lambda: app.file_meta.get(self.sample)
+                                   and len(app.preview_frames) == 4))
+        pump(app, 100)
+        self.assertIn("6 frames (first 4)", app.preview_info.cget("text"))
+
     def test_convert_button_counts_queue(self):
         self.assertIn("1 file", self.app.convert_btn.cget("text"))
 
@@ -617,7 +631,10 @@ class UITest(AppFixture, unittest.TestCase):
         app.geometry(f"{G.WIN_MIN[0]}x{G.WIN_MIN[1]}")
         pump(app, 300)
         try:
-            self.assertEqual((app.winfo_width(), app.winfo_height()), G.WIN_MIN)
+            # winfo sizes are physical pixels; WIN_MIN is in scaled units.
+            scale = G.ctk.ScalingTracker.get_window_scaling(app)
+            self.assertEqual((round(app.winfo_width() / scale),
+                              round(app.winfo_height() / scale)), G.WIN_MIN)
             self.assertEverythingFits()
         finally:
             app.resolution_preset.set("Same Resolution")
