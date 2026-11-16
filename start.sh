@@ -33,7 +33,7 @@ banner() {
   echo -e "${CYAN}  ║        ░░╚██╔╝░╚██╔╝░███████╗██████╦╝██║░░░░░        ║${RESET}"
   echo -e "${CYAN}  ║        ░░░╚═╝░░░╚═╝░░╚══════╝╚═════╝░╚═╝░░░░░        ║${RESET}"
   echo -e "${CYAN}  ║                                                      ║${RESET}"
-  echo -e "${CYAN}  ║           WebP  →  Video  Converter  v2.3           ║${RESET}"
+  echo -e "${CYAN}  ║           WebP  →  Video  Converter  v2.4           ║${RESET}"
   echo -e "${CYAN}  ║                                                      ║${RESET}"
   echo -e "${CYAN}  ╠══════════════════════════════════════════════════════╣${RESET}"
   echo -e "${CYAN}  ║                                                      ║${RESET}"

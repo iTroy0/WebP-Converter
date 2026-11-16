@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2.4.0
+
+Everything since v2.3.0.
 
 ### New
 
