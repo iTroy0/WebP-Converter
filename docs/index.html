@@ -18,6 +18,8 @@
 <meta property="og:image:alt" content="The converter in a browser, previewing an animated WebP">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="favicon.ico">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#D8DCE2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0A0D14">
 <script>
   // A remembered theme is applied before the first paint, so the page never flashes the other one.
   try {
@@ -26,45 +28,68 @@
     // No storage (private window): the theme follows the system.
   }
 </script>
+<link rel="preload" href="fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-  /* Colours match the desktop app's light and dark themes. */
+  /* Fonts are served from this site (Latin and Latin Extended only; other scripts use the system face). Licences: fonts/OFL-*.txt */
+  @font-face { font-family: "Manrope"; font-weight: 400 700; font-display: swap; src: url(fonts/manrope-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+  @font-face { font-family: "Manrope"; font-weight: 400 700; font-display: swap; src: url(fonts/manrope-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 400 500; font-display: swap; src: url(fonts/jetbrains-mono-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 400 500; font-display: swap; src: url(fonts/jetbrains-mono-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+  /* The look was dealt by taste-skill for a software page: palette blue-black-cornflower for the dark
+     theme and a light theme made from the same inks, Manrope with JetBrains Mono for figures, soft
+     corners, pill buttons. Every line and tint is the ink at a strength, so both themes stay in step. */
   :root {
     color-scheme: light dark;
-    --bg: light-dark(#E9E9EE, #0B0B0D);
-    --surface: light-dark(#F4F4F7, #141417);
-    --raised: light-dark(#FFFFFF, #1C1C21);
-    --hover: light-dark(#E6E6EC, #24242A);
-    --line: light-dark(#DADAE1, #27272E);
-    --selected: light-dark(#DEE5FF, #1C2240);
-    --text: light-dark(#16161A, #ECECF0);
-    --dim: light-dark(#5C5C66, #8D8D96);
-    --accent: light-dark(#3355E8, #4463FA);
-    --accent-hover: light-dark(#2843C4, #3A55E0);
-    --accent-text: light-dark(#2843C4, #8FA2FF);
-    --danger: light-dark(#C42B22, #E85C50);
-    --drop-tint: light-dark(#E6EBFE, #171B2E);
-    --switch-track: light-dark(#E3E3EA, #1C1C21);
-    --switch-thumb: light-dark(#FFFFFF, #393943);
-    --check-a: light-dark(#FFFFFF, #1E1E23);
-    --check-b: light-dark(#ECECF0, #17171B);
+    /* The light theme is a soft grey, not paper white: easier on the eyes over a long batch. */
+    --bg: light-dark(#D8DCE2, #0A0D14);
+    --surface: light-dark(#E4E7EC, #131824);
+    --raised: light-dark(#ECEEF2, #1A2030);
+    --thumb: light-dark(#F4F5F7, #2A3244);
+    --ink: light-dark(#0A0D14, #E9EDF3);
+    --muted: light-dark(#4E525B, #8891A1);
+    --line: color-mix(in oklab, var(--ink) 12%, transparent);
+    --line-strong: color-mix(in oklab, var(--ink) 26%, transparent);
+    --tonal: color-mix(in oklab, var(--ink) 8%, transparent);
+    --tonal-hover: color-mix(in oklab, var(--ink) 14%, transparent);
+    --action: light-dark(#0A64AE, #5AB9FC);
+    --action-ink: light-dark(#FFFFFF, #0A0D14);
+    --selected: color-mix(in oklab, var(--action) 12%, var(--raised));
+    --danger: light-dark(#C42B22, #FF7B70);
+    --check-a: light-dark(#E9EBEF, #1C2230);
+    --check-b: light-dark(#D5D9DF, #151A25);
+    --font: "Manrope", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+    --r-lg: 20px;
+    --r-md: 12px;
+    --r-sm: 8px;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+    --ease-enter: cubic-bezier(.22, 1, .36, 1);
   }
   [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--ink);
+    font: 400 16px/1.5 var(--font);
+    -webkit-font-smoothing: antialiased;
   }
-  h1 { margin: 0; font-size: 22px; }
+  h1 {
+    margin: 0;
+    font-size: clamp(28px, 2.6vw, 36px);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.035em;
+  }
   p { margin: 0; }
-  a { color: var(--accent-text); }
+  a { color: var(--action); }
   fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-  :focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+  ::selection { background: color-mix(in oklab, var(--action) 30%, transparent); }
 
   /* One column; on a wide screen the preview gets a column of its own, beside the rest. */
   .layout {
     display: grid;
-    gap: 16px;
+    gap: 24px;
     max-width: 640px;
     margin: 0 auto;
     padding: 32px 16px;
@@ -80,10 +105,13 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
-    padding: 20px;
+    padding: 24px;
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: var(--r-lg);
+  }
+  @media (width < 640px) {
+    .card { padding: 16px; border-radius: var(--r-md); }
   }
   @media (width >= 960px) {
     .layout {
@@ -106,23 +134,37 @@
   }
 
   header .top { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
-  header p { margin-top: 8px; color: var(--dim); }
+  header p { max-width: 46ch; margin-top: 12px; color: color-mix(in oklab, var(--ink) 80%, var(--bg)); font-size: 17px; text-wrap: pretty; }
 
   /* The file input is the whole drop zone: it is invisible but still takes focus. */
   #drop {
-    display: block;
+    display: grid;
+    justify-items: center;
+    gap: 12px;
     position: relative;
-    padding: 24px;
-    border: 1px dashed var(--line);
-    border-radius: 8px;
+    padding: 28px 24px;
+    border: 1.5px dashed var(--line-strong);
+    border-radius: var(--r-md);
     background: var(--raised);
     text-align: center;
     cursor: pointer;
+    transition: border-color 120ms var(--ease), background-color 120ms var(--ease);
   }
-  #drop span { color: var(--accent-text); text-decoration: underline; }
+  #drop svg { width: 32px; height: 32px; color: var(--action); }
+  #drop .choose {
+    color: var(--action);
+    font-weight: 500;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklab, currentColor 45%, transparent);
+    text-underline-offset: 3px;
+  }
+  #drop:not(:has(:disabled)):hover, #drop.over {
+    border-color: var(--action);
+    background: color-mix(in oklab, var(--action) 8%, var(--raised));
+    transition-duration: 150ms;
+  }
   #drop input { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
-  #drop.over { border-color: var(--accent); background: var(--drop-tint); }
-  #drop:has(:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  #drop:has(:focus-visible) { outline: 2px solid var(--action); outline-offset: 2px; }
   #drop:has(:disabled) { opacity: .5; cursor: default; }
 
   #queue { display: grid; gap: 8px; max-height: 50vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
@@ -130,19 +172,21 @@
   /* A click anywhere on a row shows that file in the preview. */
   #queue li {
     display: grid;
-    grid-template: "thumb name save remove" "thumb note save remove" / 40px minmax(0, 1fr) auto auto;
+    grid-template: "thumb name save remove" "thumb note save remove" / 44px minmax(0, 1fr) auto auto;
     column-gap: 12px;
     align-items: center;
     padding: 8px;
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--r-md);
     background: var(--raised);
     cursor: pointer;
+    transition: background-color 120ms var(--ease), border-color 120ms var(--ease);
   }
-  #queue li:hover { background: var(--hover); }
-  #queue li.picked { border-color: var(--accent); background: var(--selected); }
-  #queue canvas { grid-area: thumb; width: 40px; height: 40px; border-radius: 5px; background: var(--bg); object-fit: cover; }
+  #queue li:hover { background: color-mix(in oklab, var(--ink) 5%, var(--raised)); transition-duration: 150ms; }
+  #queue li.picked { border-color: var(--action); background: var(--selected); }
+  #queue canvas { grid-area: thumb; width: 44px; height: 44px; border-radius: var(--r-sm); background: var(--bg); object-fit: cover; }
   #queue .name {
+    display: block;
     grid-area: name;
     justify-self: start;
     max-width: 100%;
@@ -150,65 +194,122 @@
     padding: 0;
     overflow: hidden;
     border: 0;
+    border-radius: 0;
     background: none;
-    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
     cursor: inherit;
   }
-  #queue .name:hover { background: none; text-decoration: underline; }
-  #queue .note { grid-area: note; overflow: hidden; color: var(--dim); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+  #queue .name:is(:hover, :active) { background: none; text-decoration: underline; transform: none; }
+  #queue .note { grid-area: note; overflow: hidden; color: var(--muted); font: 13px/1.5 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
   #queue .failed .note { color: var(--danger); }
   #queue a { grid-area: save; }
-  #queue .remove { grid-area: remove; width: 32px; height: 32px; padding: 0; }
+  #queue .remove { grid-area: remove; }
   #clear { align-self: flex-end; }
 
   .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-  .options { align-items: end; }
-  .options label { color: var(--dim); font-size: 13px; }
-  .check { display: flex; gap: 8px; align-items: center; height: 40px; }
-  .options .check { color: var(--text); font-size: 15px; }
-  select, button, input[type=number], .button {
+  .options { gap: 16px 12px; align-items: end; }
+  .options label:not(.check) { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 500; }
+  .options label:not(.check) > * { color: var(--ink); font-size: 16px; font-weight: 400; }
+  .check { display: flex; gap: 10px; align-items: center; min-height: 44px; cursor: pointer; }
+  .check input { width: 18px; height: 18px; margin: 0; accent-color: var(--action); }
+  .check:has(:disabled) { opacity: .5; cursor: default; }
+
+  /* Fields: one height for every control, the action colour round the one in use. */
+  select, input[type=number] {
     display: block;
     box-sizing: border-box;
-    height: 40px;
+    height: 44px;
     padding: 0 12px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
     background: var(--raised);
-    color: var(--text);
+    color: var(--ink);
     font: inherit;
+    transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
   }
-  .button { display: inline-flex; align-items: center; text-decoration: none; }
-  input[type=number] { width: 72px; }
-  button:hover:enabled, .button:hover { background: var(--hover); }
-  #convert { border-color: var(--accent); background: var(--accent); color: #FFFFFF; }
-  #convert:hover:enabled { border-color: var(--accent-hover); background: var(--accent-hover); }
-  :disabled { opacity: .5; }
+  select:hover:enabled, input[type=number]:hover:enabled { border-color: color-mix(in oklab, var(--ink) 40%, transparent); }
+  select:focus, input[type=number]:focus { border-color: var(--action); box-shadow: 0 0 0 3px color-mix(in oklab, var(--action) 25%, transparent); }
+  input[type=number] { width: 80px; }
+
+  /* Buttons: pills; the one filled button is the main action, every other is a tint of the ink.
+     On hover a button steps up 1px, on press it sinks 1px and shrinks a little. */
+  button, .button {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: 44px;
+    padding: 0 20px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--tonal);
+    color: var(--ink);
+    font: 500 16px/1 var(--font);
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 120ms var(--ease), color 120ms var(--ease), transform 90ms var(--ease);
+  }
+  button:hover:enabled, .button:hover { background: var(--tonal-hover); transition-duration: 150ms, 150ms, 90ms; }
+  @media (hover: hover) and (pointer: fine) {
+    :is(button:enabled, .button, .coffee):hover { transform: translateY(-1px); }
+  }
+  :is(button:enabled, .button, .coffee):active { transform: translateY(1px) scale(.985); }
+  #convert { padding: 0 24px; background: var(--action); color: var(--action-ink); }
+  #convert:hover:enabled { background: color-mix(in oklab, var(--action) 84%, var(--bg)); }
+  #convert:active:enabled { background: color-mix(in oklab, var(--action) 74%, var(--bg)); }
+  /* The pill look's chevron, on Convert only: Cancel goes nowhere. */
+  #settings:not(:has(#progress:not([hidden]))) #convert::after {
+    content: "";
+    width: 12px;
+    height: 12px;
+    margin-right: -4px;
+    background: currentColor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M4.5 2.5 8 6l-3.5 3.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    transition: transform 120ms var(--ease);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    #convert:hover:enabled::after { transform: translateX(3px); transition-duration: 150ms; }
+  }
+  :disabled { opacity: .5; cursor: default; }
   fieldset:disabled { opacity: 1; }     /* a disabled group dims its controls, not itself as well */
-  /* A square button that shows one of its icons, picked by a data attribute. */
-  .icon { display: grid; place-items: center; width: 40px; padding: 0; flex: none; }
+  /* A round button that shows one of its icons, picked by a data attribute. */
+  .icon { width: 44px; padding: 0; flex: none; }
   .icon svg { width: 20px; height: 20px; }
+  .remove svg { width: 18px; height: 18px; }
   #theme[data-next=dark] .sun, #theme[data-next=light] .moon,
   #play[data-playing=true] .play, #play[data-playing=false] .pause { display: none; }
 
   /* Preview. data-state is empty (no files), off (Show preview unticked) or on. */
   #pick { flex: 1; min-width: 0; }
-  .switch { display: flex; padding: 3px; border-radius: 8px; background: var(--switch-track); }
-  .switch label { display: flex; align-items: center; height: 34px; padding: 0 14px; border-radius: 5px; cursor: pointer; }
+  .switch { display: flex; padding: 3px; border-radius: 999px; background: var(--tonal); }
+  .switch label {
+    display: flex;
+    align-items: center;
+    height: 38px;
+    padding: 0 16px;
+    border-radius: 999px;
+    color: var(--muted);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 120ms var(--ease), color 120ms var(--ease);
+  }
+  .switch label:hover { color: var(--ink); }
   .switch input { position: absolute; opacity: 0; pointer-events: none; }
-  .switch label:has(:checked) { background: var(--switch-thumb); }
-  .switch label:has(:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  .switch label:has(:checked) { background: var(--thumb); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+  .switch label:has(:focus-visible) { outline: 2px solid var(--action); outline-offset: 2px; }
   .switch label:has(:disabled) { opacity: .5; cursor: default; }
-  #view { display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; border-radius: 8px; background: var(--bg); }
+  #view { display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; border-radius: var(--r-md); background: var(--bg); overflow: hidden; }
   #stage, #video { display: block; max-width: 100%; max-height: 60vh; }
   /* A see-through picture shows a checkerboard, as in the desktop app. */
   #stage { background: repeating-conic-gradient(var(--check-a) 0 25%, var(--check-b) 0 50%) 0 0 / 24px 24px; cursor: pointer; }
-  #info { flex: 1; min-width: 0; color: var(--dim); font-size: 13px; }
-  #player { flex-wrap: nowrap; }
-  #seek { flex: 1; min-width: 0; accent-color: var(--accent); }
-  #position { min-width: 9ch; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
-  #placeholder { display: none; color: var(--dim); text-align: center; }
+  #info { flex: 1; min-width: 0; color: var(--muted); font: 13px/1.5 var(--mono); }
+  #player { flex-wrap: nowrap; gap: 8px; }
+  #seek { flex: 1; min-width: 0; margin: 0 4px; accent-color: var(--action); }
+  #position { min-width: 9ch; color: var(--muted); font: 13px/1.5 var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+  #placeholder { display: none; color: var(--muted); text-align: center; }
   #preview:not([data-state=on]) :is(#pick, #switch, #view, #details, #player) { display: none; }
   #preview[data-state=empty] .head { display: none; }
   #preview:not([data-state=on]) #placeholder { display: grid; flex: 1; place-items: center; }
@@ -222,33 +323,75 @@
     #video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
   }
 
-  progress { display: block; width: 100%; accent-color: var(--accent); }
+  progress {
+    display: block;
+    width: 100%;
+    height: 6px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--tonal);
+    overflow: hidden;
+    appearance: none;
+  }
+  progress::-webkit-progress-bar { background: var(--tonal); }
+  progress::-webkit-progress-value { border-radius: 999px; background: var(--action); }
+  progress::-moz-progress-bar { border-radius: 999px; background: var(--action); }
+  #status { font: 14px/1.5 var(--mono); }
   #status:empty { display: none; }
 
-  footer { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; justify-content: space-between; color: var(--dim); font-size: 13px; }
+  footer { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; justify-content: space-between; color: var(--muted); font-size: 14px; }
   footer p { flex: 1 1 260px; }
+  /* Footer links rest on a faint line in their own colour, and the full line draws in on hover. */
+  footer p a {
+    color: var(--ink);
+    text-decoration: none;
+    background: linear-gradient(currentColor, currentColor) right bottom / 0% 1px no-repeat,
+                linear-gradient(var(--line-strong), var(--line-strong)) left bottom / 100% 1px no-repeat;
+    padding-bottom: 2px;
+    transition: background-size 120ms var(--ease);
+  }
+  footer p a:is(:hover, :focus-visible) { background-position: left bottom, left bottom; background-size: 100% 1px, 100% 1px; transition-duration: 150ms; }
   .coffee {
     display: inline-flex;
     gap: 8px;
     align-items: center;
-    height: 40px;
-    padding: 0 16px;
-    border-radius: 8px;
+    height: 44px;
+    padding: 0 20px;
+    border-radius: 999px;
     background: #FFDD00;
     color: #16161A;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 16px;
+    font-weight: 500;
     text-decoration: none;
+    transition: background-color 120ms var(--ease), transform 90ms var(--ease);
   }
-  .coffee:hover { background: #F2D200; }
+  .coffee:hover { background: #F2D200; transition-duration: 150ms, 90ms; }
   .coffee svg { width: 20px; height: 20px; }
+
+  @media (width < 640px) {
+    #settings .row:has(#convert) > button { flex: 1 1 auto; }
+  }
+
+  /* The title rises once out of its own line, then the line under it follows; nothing else enters. */
+  header h1 { overflow: clip; padding-bottom: .12em; margin-bottom: -.12em; }
+  header h1 span { display: inline-block; }
+  @media (prefers-reduced-motion: no-preference) {
+    header h1 span { animation: rise 700ms var(--ease-enter) both; }
+    header p { animation: follow 520ms var(--ease-enter) 350ms both; }
+  }
+  @keyframes rise { from { transform: translateY(105%); } }
+  @keyframes follow { from { opacity: 0; transform: translateY(12px); } }
+  @media (prefers-reduced-motion: reduce) {
+    :is(button, .button, .coffee) { transform: none !important; }
+    #convert::after { transform: none !important; }
+  }
 </style>
 </head>
 <body>
 <main class="layout">
   <header>
     <div class="top">
-      <h1>WebP → Video Converter</h1>
+      <h1><span>WebP → Video Converter</span></h1>
       <button id="theme" class="icon" type="button">
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
           <circle cx="12" cy="12" r="4"/>
@@ -290,7 +433,11 @@
 
   <section id="sources" class="card" aria-label="Files">
     <label id="drop">
-      Drop WebP files here, or <span>choose files</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 15V4m-4 4 4-4 4 4"/>
+        <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+      </svg>
+      <span>Drop WebP files here, or <span class="choose">choose files</span></span>
       <input id="files" type="file" accept=".webp,image/webp" multiple>
     </label>
     <ul id="queue" aria-label="Files to convert"></ul>
@@ -399,8 +546,10 @@
     <canvas width="40" height="40"></canvas>
     <button class="name" type="button"></button>
     <span class="note"></span>
-    <a hidden>Download</a>
-    <button class="remove" type="button">×</button>
+    <a class="button" hidden>Download</a>
+    <button class="remove icon" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
   </li>
 </template>
 
